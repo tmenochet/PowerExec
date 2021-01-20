@@ -24,13 +24,16 @@ function Invoke-PowerExec {
     Specifies the privileged account to use.
 
 .PARAMETER Method
-    Specifies the execution method to use, defaults to WMI.
+    Specifies the execution method to use, defaults to CimProcess.
+
+.PARAMETER Protocol
+    Specifies the transport protocol to use, defaults to DCOM.
 
 .PARAMETER Threads
     Specifies the number of threads to use, defaults to 5.
 
 .EXAMPLE
-    PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt)
+    PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt) -Method CimProcess
 
 .EXAMPLE
     PS C:\> New-PowerLoader -FilePath .\script.ps1 | Invoke-PowerExec -DomainComputers ADATUM.CORP -Credential ADATUM\Administrator -Method WinRM -Threads 10
@@ -54,9 +57,13 @@ function Invoke-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [ValidateSet('SchTask', 'WinRM', 'WMI')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'WinRM')]
         [String]
-        $Method = 'WMI',
+        $Method = 'CimProcess',
+
+        [ValidateSet('Dcom', 'Wsman')]
+        [String]
+        $Protocol = 'Dcom',
 
         [ValidateNotNullOrEmpty()]
         [Int]
@@ -90,7 +97,7 @@ function Invoke-PowerExec {
 
     if ($Threads -eq 1 -or $hostList.Count -eq 1) {
         foreach ($computer in $hostList) {
-            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Method $Method
+            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Method $Method -Protocol $Protocol
         }
     }
     else {
@@ -98,6 +105,7 @@ function Invoke-PowerExec {
             ScriptBlock = $ScriptBlock
             Credential = $Credential
             Method = $Method
+            Protocol = $Protocol
             Verbose = $VerbosePreference
         }
         New-ThreadedFunction -ScriptBlock ${function:New-PowerExec} -ScriptParameters $parameters -Collection $hostList -CollectionParameter 'ComputerName' -Threads $Threads
@@ -356,10 +364,18 @@ function Local:New-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [ValidateSet('SchTask', 'WinRM', 'WMI')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'WinRM')]
         [String]
-        $Method = 'WMI'
+        $Method = 'CimProcess',
+
+        [ValidateSet('Dcom', 'Wsman')]
+        [String]
+        $Protocol = 'Dcom'
     )
+
+    if ($Method -eq 'WinRM' -and $PSBoundParameters.ContainsKey('Protocol')) {
+        Write-Warning 'Specified protocol will be ignored with method WinRM.'
+    }
 
     $output = $null
     switch ($Method) {
@@ -385,9 +401,9 @@ function Local:New-PowerExec {
                 }
             }
         }
-        'WMI' {
+        'CimProcess' {
             try {
-                $output = Invoke-WmiExec -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+                $output = Invoke-CimProcess -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
             }
             catch [Microsoft.Management.Infrastructure.CimException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
@@ -404,9 +420,47 @@ function Local:New-PowerExec {
                 }
             }
         }
-        'SchTask' {
+        'CimTask' {
             try {
-                $output = Invoke-SchTaskExec -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+                $output = Invoke-CimTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
+            }
+            catch [Microsoft.Management.Infrastructure.CimException] {
+                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Host is unreachable."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                else {
+                    Write-Warning "[$ComputerName] Execution failed. $_"
+                }
+            }
+        }
+        'CimService' {
+            try {
+                $output = Invoke-CimService -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
+            }
+            catch [Microsoft.Management.Infrastructure.CimException] {
+                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Host is unreachable."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                else {
+                    Write-Warning "[$ComputerName] Execution failed. $_"
+                }
+            }
+        }
+        'CimSubscription' {
+            try {
+                $output = Invoke-CimSubscription -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
             }
             catch [Microsoft.Management.Infrastructure.CimException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
@@ -508,7 +562,7 @@ function Local:Invoke-CimRecovery {
     }
 }
 
-function Local:Invoke-WMIExec {
+function Local:Invoke-CimProcess {
     [CmdletBinding()]
     Param (
         [ValidateNotNullOrEmpty()]
@@ -547,7 +601,7 @@ function Local:Invoke-WMIExec {
     }
     PROCESS {
         try {
-            Write-Verbose "[WMIEXEC] Running command: $command"    
+            Write-Verbose "[CIMEXEC] Running command: $command"    
             $process = Invoke-CimMethod -ClassName Win32_Process -Name Create -Arguments @{CommandLine=$command} -CimSession $cimSession -Verbose:$false
             while ((Get-CimInstance -ClassName Win32_Process -Filter "ProcessId='$($process.ProcessId)'" -CimSession $cimSession -Verbose:$false).ProcessID) {
                 Start-Sleep -Seconds 1
@@ -563,7 +617,7 @@ function Local:Invoke-WMIExec {
     }
 }
 
-function Local:Invoke-SchTaskExec {
+function Local:Invoke-CimTask {
     [CmdletBinding()]
     Param (
         [ValidateNotNullOrEmpty()]
@@ -602,7 +656,7 @@ function Local:Invoke-SchTaskExec {
     }
     PROCESS {
         try  {
-            Write-Verbose "[SCHTASKEXEC] Running command: powershell $argument"
+            Write-Verbose "[CIMEXEC] Running command: powershell $argument"
             $taskParameters = @{
                 TaskName = [guid]::NewGuid().Guid
                 Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell" -Argument $argument
@@ -619,10 +673,185 @@ function Local:Invoke-SchTaskExec {
                 Write-Warning "[$ComputerName] Failed to execute scheduled task."
             }
 
-            Write-Verbose "[SCHTASKEXEC] Unregistering scheduled task $($taskParameters.TaskName)"
-            $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask | Out-Null
+            Write-Verbose "[CIMEXEC] Unregistering scheduled task $($taskParameters.TaskName)"
+            if ($Protocol -eq 'Wsman') {
+                $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$False | Out-Null
+            }
+            else {
+                $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask | Out-Null
+            }
         }
         catch [Management.Automation.ActionPreferenceStopException] {
+            Write-Warning "[$ComputerName] Insufficient rights."
+        }
+        catch {
+            Write-Warning "[$ComputerName] Execution failed. $_"
+        }
+    }
+    END {
+        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
+        Remove-CimSession -CimSession $cimSession
+    }
+}
+
+function Local:Invoke-CimService {
+    [CmdletBinding()]
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ComputerName = $env:COMPUTERNAME,
+
+        [ValidateNotNullOrEmpty()]
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateSet('Dcom', 'Wsman')]
+        [String]
+        $Protocol = 'Dcom'
+    )
+
+    BEGIN {
+        try {
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+            else {
+                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+        }
+        catch {
+            throw $_
+        }
+        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
+        $command = 'cmd /c powershell -NoP -NonI -C "' + $delivery.Loader + '"'
+        $serviceName = [guid]::NewGuid().Guid
+    }
+    PROCESS {
+        try  {
+            Write-Verbose "[CIMEXEC] Creating service $serviceName"
+            $result = Invoke-CimMethod -ClassName Win32_Service -MethodName Create -Arguments @{
+                StartMode = 'Manual'
+                StartName = 'LocalSystem'
+                ServiceType = ([Byte] 16)
+                ErrorControl = ([Byte] 1)
+                Name = $serviceName
+                DisplayName = $serviceName
+                DesktopInteract  = $false
+                PathName = $command
+            } -CimSession $cimSession -Verbose:$false
+
+            if ($result.ReturnValue -eq 0) {
+                Write-Verbose "[CIMEXEC] Running command: $command"
+                $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -CimSession $cimSession -Verbose:$false
+                Invoke-CimMethod -MethodName StartService -InputObject $service -Verbose:$false | Out-Null
+                do {
+                    Start-Sleep -Seconds 1
+                    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -CimSession $cimSession -Verbose:$false
+                }
+                until ($service.ExitCode -ne 1077 -or $service.State -ne 'Stopped')
+
+                Write-Verbose "[CIMEXEC] Removing service $serviceName"
+                Invoke-CimMethod -MethodName Delete -InputObject $service -Verbose:$false | Out-Null
+            }
+            else {
+                Write-Warning "[$ComputerName] Service creation failed ($($result.ReturnValue))."
+            }
+        }
+        catch {
+            Write-Warning "[$ComputerName] Execution failed. $_"
+        }
+    }
+    END {
+        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
+        Remove-CimSession -CimSession $cimSession
+    }
+}
+
+function Local:Invoke-CimSubscription {
+    [CmdletBinding()]
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ComputerName = $env:COMPUTERNAME,
+
+        [ValidateNotNullOrEmpty()]
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateSet('Dcom', 'Wsman')]
+        [String]
+        $Protocol = 'Dcom',
+
+        [Int]
+        $Sleep = 60
+    )
+
+    BEGIN {
+        try {
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+            else {
+                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+            }
+        }
+        catch {
+            throw $_
+        }
+        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
+        $command = 'powershell.exe -NoP -NonI -C "' + $delivery.Loader + '"'
+        $filterName = [guid]::NewGuid().Guid
+        $consumerName = [guid]::NewGuid().Guid
+    }
+    PROCESS {
+        try  {
+            Write-Verbose "[CIMEXEC] Creating event filter $filterName"
+            $filterParameters = @{
+                EventNamespace = 'root/CIMV2'
+                Name = $filterName
+                Query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_NTLogEvent' AND TargetInstance.LogFile='Security' AND TargetInstance.EventCode='4625'"
+                QueryLanguage = 'WQL'
+            }
+            $filter = New-CimInstance -Namespace root/subscription -ClassName __EventFilter -Arguments $filterParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+
+            Write-Verbose "[CIMEXEC] Creating event consumer $consumerName"
+            $consumerParameters = @{
+                Name = $consumerName
+                CommandLineTemplate = $command
+            }
+            $consumer = New-CimInstance -Namespace root/subscription -ClassName CommandLineEventConsumer -Arguments $consumerParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+
+            Write-Verbose "[CIMEXEC] Creating event to consumer binding"
+            $bindingParameters = @{
+                Filter = [Ref]$filter
+                Consumer = [Ref]$consumer
+            }
+            $binding = New-CimInstance -Namespace root/subscription -ClassName __FilterToConsumerBinding -Arguments $bindingParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+
+            Write-Verbose "[CIMEXEC] Running command: $command"
+            New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object System.Security.SecureString))) -SessionOption $cimOption -ErrorAction SilentlyContinue -Verbose:$false
+
+            Write-Verbose "[CIMEXEC] Waiting for $Sleep seconds"
+            Start-Sleep -Seconds $Sleep
+
+            Write-Verbose "[CIMEXEC] Removing event subscription"
+            $binding | Remove-CimInstance -Verbose:$false
+            $consumer | Remove-CimInstance -Verbose:$false
+            $filter | Remove-CimInstance -Verbose:$false
+        }
+        catch [Microsoft.Management.Infrastructure.CimException] {
             Write-Warning "[$ComputerName] Insufficient rights."
         }
         catch {
