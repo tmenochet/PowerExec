@@ -7,13 +7,26 @@ PowerExec combines various bypass techniques and execution methods for fileless 
 
 ```
 Invoke-PowerExec                -   runs PowerShell script block on remote computers through various execution methods
-New-PowerLoader                 -   builds script block for in-memory execution of PowerShell, .NET assembly or shellcode
+New-PowerLoader                 -   builds script block for in-memory execution of various payload types
 ```
+
+
+## Payload types
+
+Payload type must be specified within the function `New-PowerLoader`:
+
+| Type      | Description                               |
+| --------- | ----------------------------------------- |
+| PoSh      | PowerShell script                         |
+| NetAsm    | .NET assembly executable                  |
+| Shellcode | Shellcode in binary format (experimental) |
+
+Resulting PowerShell script block is built either from a local payload file or from a remote payload using a download cradle.
 
 
 ## Bypass techniques
 
-Bypass techniques should be specified within the `New-PowerLoader` function:
+Bypass techniques can be specified within the function `New-PowerLoader`:
 
 | Bypass | Description                                              |
 | ------ | -------------------------------------------------------- |
@@ -25,17 +38,19 @@ Bypass techniques should be specified within the `New-PowerLoader` function:
 
 ## Execution methods
 
-The execution method should be specified within the `Invoke-PowerExec` function:
+The execution method must be specified within the function `Invoke-PowerExec`:
 
 | Method          | Description                                                            |
 | --------------- | ---------------------------------------------------------------------- |
 | CimProcess      | Create process via WMI                                                 |
-| CimTask         | Create temporary scheduled task via WMI running as NT AUTHORITY\SYSTEM |
-| CimService      | Create temporary service via WMI running as NT AUTHORITY\SYSTEM        |
+| CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI |
+| CimService      | Create temporary service running as NT AUTHORITY\SYSTEM via WMI        |
 | CimSubscription | Create temporary WMI event subscription (experimental)                 |
 | WinRM           | Run powershell via Windows Remote Management                           |
 
-The transport protocol should be chosen between DCOM and WSMAN for WMI methods.
+For WMI methods, the transport protocol can be chosen between DCOM and WSMAN.
+
+The execution output is retrieved regardless of the method used.
 
 
 ## Examples
