@@ -656,13 +656,15 @@ function Local:Invoke-CimTask {
     }
     PROCESS {
         try  {
-            Write-Verbose "[CIMEXEC] Running command: powershell $argument"
             $taskParameters = @{
                 TaskName = [guid]::NewGuid().Guid
                 Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell" -Argument $argument
+                Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
                 Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $cimSession
             }
+            Write-Verbose "[CIMEXEC] Registering scheduled task $($taskParameters.TaskName)"
             $scheduledTask = Register-ScheduledTask @taskParameters -CimSession $cimSession -ErrorAction Stop
+            Write-Verbose "[CIMEXEC] Running command: powershell $argument"
             $cimJob = $scheduledTask | Start-ScheduledTask -AsJob -ErrorAction Stop
             $cimJob | Wait-Job | Remove-Job -Force -Confirm:$False
             while (($scheduledTaskInfo = $scheduledTask | Get-ScheduledTaskInfo).LastTaskResult -eq 267009) {
