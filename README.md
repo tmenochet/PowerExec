@@ -46,6 +46,7 @@ The execution method must be specified within the function `Invoke-PowerExec`:
 | CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI |
 | CimService      | Create temporary service running as NT AUTHORITY\SYSTEM via WMI        |
 | CimSubscription | Create temporary WMI event subscription (experimental)                 |
+| SmbService      | Create temporary service running as NT AUTHORITY\SYSTEM via SMB        |
 | WinRM           | Run powershell via Windows Remote Management                           |
 
 For WMI methods, the transport protocol can be chosen between DCOM and WSMAN.

