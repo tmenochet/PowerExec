@@ -17,8 +17,11 @@ Function Invoke-PowerExec {
 .PARAMETER ComputerList
     Specifies the target hosts, such as specific addresses or network ranges (CIDR).
 
-.PARAMETER DomainComputers
-    Specifies an Active Directory domain for enumerating target hosts.
+.PARAMETER ComputerDomain
+    Specifies an Active Directory domain for enumerating target computers.
+
+.PARAMETER ComputerFilter
+    Specifies a specific role for enumerating target controllers, defaults to 'All'.
 
 .PARAMETER Credential
     Specifies the privileged account to use.
@@ -36,7 +39,7 @@ Function Invoke-PowerExec {
     PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt) -Method CimProcess
 
 .EXAMPLE
-    PS C:\> New-PowerLoader -FilePath .\script.ps1 | Invoke-PowerExec -DomainComputers ADATUM.CORP -Credential ADATUM\Administrator -Method WinRM -Threads 10
+    PS C:\> New-PowerLoader -FilePath .\script.ps1 | Invoke-PowerExec -ComputerDomain ADATUM.CORP -Credential ADATUM\Administrator -Method WinRM -Threads 10
 #>
     [CmdletBinding()]
     Param (
@@ -50,7 +53,11 @@ Function Invoke-PowerExec {
 
         [ValidateNotNullOrEmpty()]
         [string]
-        $DomainComputers,
+        $ComputerDomain = $Env:LOGONSERVER,
+
+        [ValidateSet('All', 'DomainControllers', 'Servers', 'Workstations')]
+        [String]
+        $ComputerFilter = 'All',
 
         [ValidateNotNullOrEmpty()]
         [Management.Automation.PSCredential]
@@ -81,13 +88,26 @@ Function Invoke-PowerExec {
         }
     }
 
-    if ($DomainComputers) {
-        $searchString = "LDAP://$DomainComputers/RootDSE"
+    if ($PSBoundParameters['ComputerDomain'] -or $PSBoundParameters['ComputerFilter']) {
+        switch ($ComputerFilter) {
+            'All' {
+                $filter = '(&(objectCategory=computer)(!userAccountControl:1.2.840.113556.1.4.803:=2))'
+            }
+            'DomainControllers' {
+                $filter = '(userAccountControl:1.2.840.113556.1.4.803:=8192)'
+            }
+            'Servers' {
+                $filter = '(&(objectCategory=computer)(operatingSystem=*server*)(!userAccountControl:1.2.840.113556.1.4.803:=2)(!userAccountControl:1.2.840.113556.1.4.803:=8192))'
+            }
+            'Workstations' {
+                $filter = '(&(objectCategory=computer)(!operatingSystem=*server*)(!userAccountControl:1.2.840.113556.1.4.803:=2))'
+            }
+        }
+        $searchString = "LDAP://$ComputerDomain/RootDSE"
         $domainObject = New-Object DirectoryServices.DirectoryEntry($searchString, $null, $null)
-        $rootDN = $domainObject.rootDomainNamingContext[0]
-        $ADSpath = "LDAP://$DomainComputers/$rootDN"
-        $filter = "(&(samAccountType=805306369)(!userAccountControl:1.2.840.113556.1.4.803:=2))"
-        $computers = Get-LdapObject -ADSpath $ADSpath -Filter $filter -Properties 'dnshostname' -Credential $Credential
+        $defaultNC = $domainObject.defaultNamingContext[0]
+        $adsPath = "LDAP://$ComputerDomain/$defaultNC"
+        $computers = Get-LdapObject -ADSpath $adsPath -Filter $filter -Properties 'dnshostname' -Credential $Credential
         foreach ($computer in $computers) {
             if ($computer.dnshostname) {
                 $hostList.Add($($computer.dnshostname).ToString()) | Out-Null
@@ -747,7 +767,7 @@ Function Local:Invoke-CimService {
             throw $_
         }
         $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
-        $command = 'cmd /c powershell -NoP -NonI -C "' + $delivery.Loader + '"'
+        $command = '%COMSPEC% /c powershell -NoP -NonI -C "' + $delivery.Loader + '"'
         $serviceName = [guid]::NewGuid().Guid
     }
     PROCESS {
@@ -859,7 +879,7 @@ Function Local:Invoke-CimSubscription {
             $binding = New-CimInstance -Namespace root/subscription -ClassName __FilterToConsumerBinding -Arguments $bindingParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
 
             Write-Verbose "[CIMEXEC] Running command: $command"
-            New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object System.Security.SecureString))) -SessionOption $cimOption -ErrorAction SilentlyContinue -Verbose:$false
+            New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object Security.SecureString))) -SessionOption $cimOption -ErrorAction SilentlyContinue -Verbose:$false
 
             Write-Verbose "[CIMEXEC] Waiting for $Sleep seconds"
             Start-Sleep -Seconds $Sleep
@@ -977,7 +997,7 @@ function Local:Invoke-SmbService {
         Write-Verbose "[SMBEXEC] Starting the service"
         if ($StartServiceA.Invoke($serviceHandle, $null, $null) -eq 0){
             $err = $GetLastError.Invoke()
-            if ($err -eq 1053){
+            if ($err -eq 1053) {
                 Write-Verbose "[SMBEXEC] Command didn't respond to start"
             }
             else{
@@ -1032,102 +1052,74 @@ function Local:Invoke-SmbService {
 
 Function Local:Get-DelegateType {
     Param (
-        [OutputType([Type])]
-
-        [Parameter( Position = 0)]
         [Type[]]
         $Parameters = (New-Object Type[](0)),
 
-        [Parameter( Position = 1 )]
         [Type]
         $ReturnType = [Void]
     )
-    $Domain = [AppDomain]::CurrentDomain
-    $DynAssembly = New-Object System.Reflection.AssemblyName('ReflectedDelegate')
-    $AssemblyBuilder = $Domain.DefineDynamicAssembly($DynAssembly, [Reflection.Emit.AssemblyBuilderAccess]::Run)
-    $ModuleBuilder = $AssemblyBuilder.DefineDynamicModule('InMemoryModule', $false)
-    $TypeBuilder = $ModuleBuilder.DefineType('MyDelegateType', 'Class, Public, Sealed, AnsiClass, AutoClass', [MulticastDelegate])
-    $ConstructorBuilder = $TypeBuilder.DefineConstructor('RTSpecialName, HideBySig, Public', [Reflection.CallingConventions]::Standard, $Parameters)
-    $ConstructorBuilder.SetImplementationFlags('Runtime, Managed')
-    $MethodBuilder = $TypeBuilder.DefineMethod('Invoke', 'Public, HideBySig, NewSlot, Virtual', $ReturnType, $Parameters)
-    $MethodBuilder.SetImplementationFlags('Runtime, Managed')
-    Write-Output $TypeBuilder.CreateType()
+    $domain = [AppDomain]::CurrentDomain
+    $dynAssembly = New-Object Reflection.AssemblyName('ReflectedDelegate')
+    $assemblyBuilder = $domain.DefineDynamicAssembly($dynAssembly, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+    $moduleBuilder = $assemblyBuilder.DefineDynamicModule('InMemoryModule', $false)
+    $typeBuilder = $moduleBuilder.DefineType('MyDelegateType', 'Class, Public, Sealed, AnsiClass, AutoClass', [MulticastDelegate])
+    $constructorBuilder = $typeBuilder.DefineConstructor('RTSpecialName, HideBySig, Public', [Reflection.CallingConventions]::Standard, $Parameters)
+    $constructorBuilder.SetImplementationFlags('Runtime, Managed')
+    $methodBuilder = $typeBuilder.DefineMethod('Invoke', 'Public, HideBySig, NewSlot, Virtual', $ReturnType, $Parameters)
+    $methodBuilder.SetImplementationFlags('Runtime, Managed')
+    Write-Output $typeBuilder.CreateType()
 }
 
 Function Local:Get-ProcAddress {
     Param (
-        [OutputType([IntPtr])]
-
-        [Parameter( Position = 0, Mandatory = $True )]
+        [Parameter(Mandatory = $True)]
         [String]
         $Module,
 
-        [Parameter( Position = 1, Mandatory = $True )]
+        [Parameter(Mandatory = $True)]
         [String]
         $Procedure
     )
-    $SystemAssembly = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GlobalAssemblyCache -And $_.Location.Split('\\')[-1].Equals('System.dll') }
-    $UnsafeNativeMethods = $SystemAssembly.GetType('Microsoft.Win32.UnsafeNativeMethods')
-    $GetModuleHandle = $UnsafeNativeMethods.GetMethod('GetModuleHandle')
-    $GetProcAddress = $UnsafeNativeMethods.GetMethod('GetProcAddress', [Type[]]@([Runtime.InteropServices.HandleRef], [String]))
-    $Kern32Handle = $GetModuleHandle.Invoke($null, @($Module))
+    $systemAssembly = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GlobalAssemblyCache -And $_.Location.Split('\\')[-1].Equals('System.dll') }
+    $unsafeNativeMethods = $systemAssembly.GetType('Microsoft.Win32.UnsafeNativeMethods')
+    $getModuleHandle = $unsafeNativeMethods.GetMethod('GetModuleHandle')
+    $getProcAddress = $unsafeNativeMethods.GetMethod('GetProcAddress', [Type[]]@([Runtime.InteropServices.HandleRef], [String]))
+    $kern32Handle = $getModuleHandle.Invoke($null, @($Module))
     $tmpPtr = New-Object IntPtr
-    $HandleRef = New-Object System.Runtime.InteropServices.HandleRef($tmpPtr, $Kern32Handle)
-    Write-Output $GetProcAddress.Invoke($null, @([Runtime.InteropServices.HandleRef]$HandleRef, $Procedure))
+    $handleRef = New-Object Runtime.InteropServices.HandleRef($tmpPtr, $kern32Handle)
+    Write-Output $getProcAddress.Invoke($null, @([Runtime.InteropServices.HandleRef]$handleRef, $Procedure))
 }
 
-# Adapted from PowerView by @harmj0y and @mattifestation
 Function Local:Invoke-UserImpersonation {
-    [OutputType([IntPtr])]
-    [CmdletBinding(DefaultParameterSetName = 'Credential')]
     Param(
-        [Parameter(Mandatory = $True, ParameterSetName = 'Credential')]
+        [Parameter(Mandatory = $True)]
         [Management.Automation.PSCredential]
         [Management.Automation.CredentialAttribute()]
-        $Credential,
-
-        [Parameter(Mandatory = $True, ParameterSetName = 'TokenHandle')]
-        [ValidateNotNull()]
-        [IntPtr]
-        $TokenHandle,
-
-        [Switch]
-        $Quiet
+        $Credential
     )
 
-    if (([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') -and (-not $PSBoundParameters['Quiet'])) {
-        Write-Warning "[UserImpersonation] powershell.exe is not currently in a single-threaded apartment state, token impersonation may not work."
+    $logonUserAddr = Get-ProcAddress Advapi32.dll LogonUserA
+    $logonUserDelegate = Get-DelegateType @([String], [String], [String], [UInt32], [UInt32], [IntPtr].MakeByRefType()) ([Bool])
+    $logonUser = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($logonUserAddr, $logonUserDelegate)
+
+    $impersonateLoggedOnUserAddr = Get-ProcAddress Advapi32.dll ImpersonateLoggedOnUser
+    $impersonateLoggedOnUserDelegate = Get-DelegateType @([IntPtr]) ([Bool])
+    $impersonateLoggedOnUser = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($impersonateLoggedOnUserAddr, $impersonateLoggedOnUserDelegate)
+
+    $logonTokenHandle = [IntPtr]::Zero
+    $networkCredential = $Credential.GetNetworkCredential()
+    $userDomain = $networkCredential.Domain
+    $userName = $networkCredential.UserName
+
+    if (-not $logonUser.Invoke($userName, $userDomain, $networkCredential.Password, 9, 3, [ref]$logonTokenHandle)) {
+        $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "[UserImpersonation] LogonUser error: $(([ComponentModel.Win32Exception] $lastError).Message)"
     }
 
-    $LogonUserAddr = Get-ProcAddress Advapi32.dll LogonUserA
-    $LogonUserDelegate = Get-DelegateType @([String], [String], [String], [UInt32], [UInt32], [IntPtr].MakeByRefType()) ([Bool])
-    $LogonUser = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($LogonUserAddr, $LogonUserDelegate)
-
-    $ImpersonateLoggedOnUserAddr = Get-ProcAddress Advapi32.dll ImpersonateLoggedOnUser
-    $ImpersonateLoggedOnUserDelegate = Get-DelegateType @([IntPtr]) ([Bool])
-    $ImpersonateLoggedOnUser = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($ImpersonateLoggedOnUserAddr, $ImpersonateLoggedOnUserDelegate)
-
-    if ($PSBoundParameters['TokenHandle']) {
-        $LogonTokenHandle = $TokenHandle
+    if (-not $impersonateLoggedOnUser.Invoke($logonTokenHandle)) {
+        throw "[UserImpersonation] ImpersonateLoggedOnUser error: $(([ComponentModel.Win32Exception] $lastError).Message)"
     }
-    else {
-        $LogonTokenHandle = [IntPtr]::Zero
-        $NetworkCredential = $Credential.GetNetworkCredential()
-        $UserDomain = $NetworkCredential.Domain
-        $UserName = $NetworkCredential.UserName
-        Write-Verbose "[UserImpersonation] Executing LogonUser() with user: $($UserDomain)\$($UserName)"
-
-        if (-not $LogonUser.Invoke($UserName, $UserDomain, $NetworkCredential.Password, 9, 3, [ref]$LogonTokenHandle)) {
-            $LastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            throw "[UserImpersonation] LogonUser() Error: $(([ComponentModel.Win32Exception] $LastError).Message)"
-        }
-    }
-
-    if (-not $ImpersonateLoggedOnUser.Invoke($LogonTokenHandle)) {
-        throw "[UserImpersonation] ImpersonateLoggedOnUser() Error: $(([ComponentModel.Win32Exception] $LastError).Message)"
-    }
-    Write-Verbose "[UserImpersonation] Alternate credentials successfully impersonated"
-    $LogonTokenHandle
+    Write-Output $logonTokenHandle
 }
 
 Function Local:Invoke-RevertToSelf {
@@ -1138,21 +1130,19 @@ Function Local:Invoke-RevertToSelf {
         $TokenHandle
     )
 
-    $CloseHandleAddr = Get-ProcAddress Kernel32.dll CloseHandle
-    $CloseHandleDelegate = Get-DelegateType @([IntPtr]) ([Bool])
-    $CloseHandle = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($CloseHandleAddr, $CloseHandleDelegate)
+    $closeHandleAddr = Get-ProcAddress Kernel32.dll CloseHandle
+    $closeHandleDelegate = Get-DelegateType @([IntPtr]) ([Bool])
+    $closeHandle = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($closeHandleAddr, $closeHandleDelegate)
 
-    $RevertToSelfAddr = Get-ProcAddress Advapi32.dll RevertToSelf
-    $RevertToSelfDelegate = Get-DelegateType @() ([Bool])
-    $RevertToSelf = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($RevertToSelfAddr, $RevertToSelfDelegate)
+    $revertToSelfAddr = Get-ProcAddress Advapi32.dll RevertToSelf
+    $revertToSelfDelegate = Get-DelegateType @() ([Bool])
+    $revertToSelf = [Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer($revertToSelfAddr, $revertToSelfDelegate)
 
     if ($PSBoundParameters['TokenHandle']) {
-        Write-Verbose "[RevertToSelf] Reverting token impersonation and closing LogonUser() token handle"
-        $CloseHandle.Invoke($TokenHandle) | Out-Null
+        $closeHandle.Invoke($TokenHandle) | Out-Null
     }
-    if (-not $RevertToSelf.Invoke()) {
-        $LastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        throw "[RevertToSelf] RevertToSelf() Error: $(([ComponentModel.Win32Exception] $LastError).Message)"
+    if (-not $revertToSelf.Invoke()) {
+        $lastError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "[RevertToSelf] Error: $(([ComponentModel.Win32Exception] $lastError).Message)"
     }
-    Write-Verbose "[RevertToSelf] Token impersonation successfully reverted"
 }
