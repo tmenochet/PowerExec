@@ -302,8 +302,12 @@ Function Local:Invoke-NetLoader {
         [string[]] $ArgumentList
     )
 
-    $output = New-Object IO.StringWriter
-    [Console]::SetOut($output)
+    $realStdOut = [Console]::Out
+    $realStdErr = [Console]::Error
+    $stdOutWriter = New-Object IO.StringWriter
+    $stdErrWriter = New-Object IO.StringWriter
+    [Console]::SetOut($stdOutWriter)
+    [Console]::SetError($stdErrWriter)
     $assembly = [Reflection.Assembly]::Load([byte[]]$Code)
     $al = New-Object -TypeName Collections.ArrayList
     $al.add($ArgumentList) | Out-Null
@@ -314,7 +318,11 @@ Function Local:Invoke-NetLoader {
         Write-Warning $_
     }
     finally {
-        Write-Output $output.ToString()
+        [Console]::SetOut($realStdOut)
+        [Console]::SetError($realStdErr)
+        $output = $stdOutWriter.ToString()
+        $output += $stdErrWriter.ToString();
+        Write-Output $output
     }
 }
 
