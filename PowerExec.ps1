@@ -77,6 +77,10 @@ Function Invoke-PowerExec {
         $Threads = 5
     )
 
+    if ($Method -eq 'WinRM' -and $PSBoundParameters.ContainsKey('Protocol')) {
+        Write-Warning 'Specified protocol will be ignored with method WinRM.'
+    }
+
     $hostList = New-Object Collections.ArrayList
 
     foreach ($computer in $ComputerList) {
@@ -392,10 +396,6 @@ Function Local:New-PowerExec {
         [String]
         $Protocol = 'Dcom'
     )
-
-    if ($Method -eq 'WinRM' -and $PSBoundParameters.ContainsKey('Protocol')) {
-        Write-Warning 'Specified protocol will be ignored with method WinRM.'
-    }
 
     $output = $null
     switch ($Method) {
