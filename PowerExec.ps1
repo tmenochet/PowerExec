@@ -33,7 +33,7 @@ Function Invoke-PowerExec {
     Specifies the transport protocol to use, defaults to DCOM.
 
 .PARAMETER Threads
-    Specifies the number of threads to use, defaults to 5.
+    Specifies the number of threads to use, defaults to 1.
 
 .EXAMPLE
     PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt) -Method CimProcess
@@ -74,7 +74,7 @@ Function Invoke-PowerExec {
 
         [ValidateNotNullOrEmpty()]
         [Int]
-        $Threads = 5
+        $Threads = 1
     )
 
     if ($Method -eq 'WinRM' -and $PSBoundParameters.ContainsKey('Protocol')) {

