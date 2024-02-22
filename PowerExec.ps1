@@ -29,11 +29,17 @@ Function Invoke-PowerExec {
 .PARAMETER Credential
     Specifies the privileged account to use.
 
+.PARAMETER Authentication
+    Specifies what authentication method should be used.
+
 .PARAMETER Method
     Specifies the execution method to use, defaults to CimProcess.
 
 .PARAMETER Protocol
     Specifies the transport protocol to use, defaults to DCOM.
+
+.PARAMETER Timeout
+    Specifies the duration to wait for a response from the target host (in seconds), defaults to 3.
 
 .PARAMETER Threads
     Specifies the number of threads to use, defaults to 1.
@@ -70,6 +76,10 @@ Function Invoke-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
+        [ValidateSet('Default', 'Kerberos', 'Negotiate', 'NtlmDomain')]
+        [String]
+        $Authentication = 'Default',
+
         [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'WinRM')]
         [String]
         $Method = 'CimProcess',
@@ -78,6 +88,9 @@ Function Invoke-PowerExec {
         [String]
         $Protocol = 'Dcom',
 
+        [Int]
+        $Timeout = 3,
+
         [ValidateNotNullOrEmpty()]
         [Int]
         $Threads = 1
@@ -85,6 +98,9 @@ Function Invoke-PowerExec {
 
     if ($PSBoundParameters.ContainsKey('Protocol') -and $Method -notmatch 'Cim.*') {
         Write-Warning "Specified protocol will be ignored with the execution method $Method."
+    }
+    if ($PSBoundParameters.ContainsKey('Authentication') -and $Method -eq 'SmbService') {
+        Write-Warning "Specified authentication method will be ignored with the execution method $Method."
     }
 
     $hostList = New-Object Collections.ArrayList
@@ -122,15 +138,17 @@ Function Invoke-PowerExec {
 
     if ($Threads -eq 1 -or $hostList.Count -eq 1) {
         foreach ($computer in $hostList) {
-            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Method $Method -Protocol $Protocol
+            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Authentication $Authentication -Method $Method -Protocol $Protocol -Timeout $Timeout
         }
     }
     else {
         $parameters = @{
             ScriptBlock = $ScriptBlock
             Credential = $Credential
+            Authentication = $Authentication
             Method = $Method
             Protocol = $Protocol
+            Timeout = $Timeout
             Verbose = $VerbosePreference
         }
         New-ThreadedFunction -ScriptBlock ${function:New-PowerExec} -ScriptParameters $parameters -Collection $hostList -CollectionParameter 'ComputerName' -Threads $Threads
@@ -513,20 +531,27 @@ Function Local:New-PowerExec {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
+        [String]
+        $Authentication = 'Default',
+
         [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
         [ValidateSet('Dcom', 'Wsman')]
         [String]
-        $Protocol = 'Dcom'
+        $Protocol = 'Dcom',
+
+        [Int]
+        $Timeout = 3
     )
 
     $output = $null
     switch ($Method) {
         'WinRM' {
             try {
-                $output = Invoke-Command -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop
+                $psOption = New-PSSessionOption -NoMachineProfile -OperationTimeout $($Timeout*1000)
+                $output = Invoke-Command -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $psOption -ErrorAction Stop
             }
             catch [Management.Automation.RuntimeException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'ComputerNotFound,PSSessionStateBroken') {
@@ -548,7 +573,7 @@ Function Local:New-PowerExec {
         }
         'CimProcess' {
             try {
-                $output = Invoke-CimProcess -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
+                $output = Invoke-CimProcess -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
             }
             catch [Microsoft.Management.Infrastructure.CimException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
@@ -567,7 +592,7 @@ Function Local:New-PowerExec {
         }
         'CimTask' {
             try {
-                $output = Invoke-CimTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
+                $output = Invoke-CimTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
             }
             catch [Microsoft.Management.Infrastructure.CimException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
@@ -586,7 +611,7 @@ Function Local:New-PowerExec {
         }
         'CimService' {
             try {
-                $output = Invoke-CimService -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
+                $output = Invoke-CimService -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
             }
             catch [Microsoft.Management.Infrastructure.CimException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
@@ -605,7 +630,7 @@ Function Local:New-PowerExec {
         }
         'CimSubscription' {
             try {
-                $output = Invoke-CimSubscription -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Protocol $Protocol -Verbose:$false
+                $output = Invoke-CimSubscription -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
             }
             catch [Microsoft.Management.Infrastructure.CimException] {
                 if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
@@ -739,19 +764,25 @@ Function Local:Invoke-CimProcess {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
+        [String]
+        $Authentication = 'Default',
+
         [ValidateSet('Dcom', 'Wsman')]
         [String]
-        $Protocol = 'Dcom'
+        $Protocol = 'Dcom',
+
+        [Int]
+        $Timeout = 3
     )
 
     BEGIN {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
             else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
         }
         catch {
@@ -794,19 +825,25 @@ Function Local:Invoke-CimTask {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
+        [String]
+        $Authentication = 'Default',
+
         [ValidateSet('Dcom', 'Wsman')]
         [String]
-        $Protocol = 'Dcom'
+        $Protocol = 'Dcom',
+
+        [Int]
+        $Timeout = 3
     )
 
     BEGIN {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
             else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
         }
         catch {
@@ -845,7 +882,7 @@ Function Local:Invoke-CimTask {
             }
         }
         catch [Management.Automation.ActionPreferenceStopException] {
-            Write-Warning "[$ComputerName] Insufficient rights."
+            Write-Warning "[$ComputerName] Insufficient rights. $_"
         }
         catch {
             Write-Warning "[$ComputerName] Execution failed. $_"
@@ -873,19 +910,25 @@ Function Local:Invoke-CimService {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
+        [String]
+        $Authentication = 'Default',
+
         [ValidateSet('Dcom', 'Wsman')]
         [String]
-        $Protocol = 'Dcom'
+        $Protocol = 'Dcom',
+
+        [Int]
+        $Timeout = 3
     )
 
     BEGIN {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
             else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
         }
         catch {
@@ -952,9 +995,15 @@ Function Local:Invoke-CimSubscription {
         [Management.Automation.Credential()]
         $Credential = [Management.Automation.PSCredential]::Empty,
 
+        [String]
+        $Authentication = 'Default',
+
         [ValidateSet('Dcom', 'Wsman')]
         [String]
         $Protocol = 'Dcom',
+
+        [Int]
+        $Timeout = 3,
 
         [Int]
         $Sleep = 60
@@ -964,10 +1013,10 @@ Function Local:Invoke-CimSubscription {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
             else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -SessionOption $cimOption -ErrorAction Stop -Verbose:$false
+                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
             }
         }
         catch {
@@ -1004,7 +1053,7 @@ Function Local:Invoke-CimSubscription {
             $binding = New-CimInstance -Namespace root/subscription -ClassName __FilterToConsumerBinding -Arguments $bindingParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
 
             Write-Verbose "[CIMEXEC] Running command: $command"
-            New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object Security.SecureString))) -SessionOption $cimOption -ErrorAction SilentlyContinue -Verbose:$false
+            New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object Security.SecureString))) -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction SilentlyContinue -Verbose:$false
 
             Write-Verbose "[CIMEXEC] Waiting for $Sleep seconds"
             Start-Sleep -Seconds $Sleep
@@ -1013,9 +1062,6 @@ Function Local:Invoke-CimSubscription {
             $binding | Remove-CimInstance -Verbose:$false
             $consumer | Remove-CimInstance -Verbose:$false
             $filter | Remove-CimInstance -Verbose:$false
-        }
-        catch [Microsoft.Management.Infrastructure.CimException] {
-            Write-Warning "[$ComputerName] Insufficient rights."
         }
         catch {
             Write-Warning "[$ComputerName] Execution failed. $_"
@@ -1144,8 +1190,9 @@ function Local:Invoke-SmbService {
         $script = $script -creplace '(?m)^\s*\r?\n',''
         $in = [char[]] $script
 
+        $pipeTimeout = 10000 # 10s
         $pipeclient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
-        $pipeclient.Connect()
+        $pipeclient.Connect($pipeTimeout)
         $writer = New-Object  IO.StreamWriter($pipeclient)
         $writer.AutoFlush = $true
         $writer.WriteLine($in)
