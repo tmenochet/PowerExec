@@ -34,6 +34,7 @@ Bypass techniques can be specified within the function `New-PowerLoader`:
 | ETW    | Bypass Event Tracing for Windows via in-memory patching  |
 | SBL    | Disable PowerShell Script Block Logging                  |
 | PML    | Disable PowerShell Module Logging                        |
+| PRM    | Disable PowerShell Readline Module                       |
 
 
 ## Execution methods
