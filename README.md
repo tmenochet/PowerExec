@@ -41,14 +41,15 @@ Bypass techniques can be specified within the function `New-PowerLoader`:
 
 The execution method must be specified within the function `Invoke-PowerExec`:
 
-| Method          | Description                                                            |
-| --------------- | ---------------------------------------------------------------------- |
-| CimProcess      | Create process via WMI                                                 |
-| CimService      | Create temporary service running as NT AUTHORITY\SYSTEM via WMI        |
-| CimSubscription | Create temporary WMI event subscription (experimental)                 |
-| CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI |
-| SmbService      | Create temporary service running as NT AUTHORITY\SYSTEM via SMB        |
-| WinRM           | Run powershell via Windows Remote Management                           |
+| Method          | Description                                                                       |
+| --------------- | --------------------------------------------------------------------------------- |
+| CimProcess      | Create process via WMI                                                            |
+| CimService      | Create temporary service running as NT AUTHORITY\SYSTEM via WMI                   |
+| CimSubscription | Create temporary WMI event subscription (experimental)                            |
+| CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI            |
+| SmbService      | Create temporary service running as NT AUTHORITY\SYSTEM via SMB named pipe        |
+| SmbTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via SMB named pipe |
+| WinRM           | Run powershell via Windows Remote Management                                      |
 
 For WMI methods, the transport protocol can be chosen between DCOM and WSMAN.
 
