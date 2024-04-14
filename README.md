@@ -43,15 +43,16 @@ Bypass techniques can be specified within the function `New-PowerLoader`:
 
 The execution method must be specified within the function `Invoke-PowerExec`:
 
-| Method          | Description                                                                       |
-| --------------- | --------------------------------------------------------------------------------- |
-| CimProcess      | Create process via WMI                                                            |
-| CimService      | Create temporary service running as NT AUTHORITY\SYSTEM via WMI                   |
-| CimSubscription | Create temporary WMI event subscription (experimental)                            |
-| CimTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via WMI            |
-| SmbService      | Create temporary service running as NT AUTHORITY\SYSTEM via SMB named pipe        |
-| SmbTask         | Create temporary scheduled task running as NT AUTHORITY\SYSTEM via SMB named pipe |
-| WinRM           | Run powershell via Windows Remote Management                                      |
+| Method          | Description                                               | Run as              |
+| --------------- | --------------------------------------------------------- | ------------------- |
+| CimProcess      | Create process via WMI                                    | Current user        |
+| CimService      | Create temporary service via WMI                          | NT AUTHORITY\SYSTEM |
+| CimSubscription | Create temporary WMI event subscription (experimental)    | NT AUTHORITY\SYSTEM |
+| CimTask         | Create temporary scheduled task via WMI                   | NT AUTHORITY\SYSTEM |
+| SmbDcom         | Create DCOM instance leveraging SMB named pipe            | Current user        |
+| SmbService      | Create temporary service leveraging SMB named pipe        | NT AUTHORITY\SYSTEM |
+| SmbTask         | Create temporary scheduled task leveraging SMB named pipe | NT AUTHORITY\SYSTEM |
+| WinRM           | Run powershell via Windows Remote Management              | Current user        |
 
 For WMI methods, the transport protocol can be chosen between DCOM and WSMAN.
 
