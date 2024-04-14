@@ -19,10 +19,12 @@ The payload type must be specified within the function `New-PowerLoader`:
 | --------- | ----------------------------------------- |
 | PoSh      | PowerShell script                         |
 | NetAsm    | .NET assembly executable                  |
+| PE        | Windows PE file (EXE/DLL)                 |
 | Shellcode | Shellcode in binary format (experimental) |
 
 Resulting PowerShell script block is built either from a local payload file or from a remote payload using a download cradle.
 
+Please note that PE execution output will only be retrieved when run locally, not remotely.
 
 ## Bypass techniques
 
