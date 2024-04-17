@@ -8,8 +8,7 @@ Function Invoke-PowerExec {
     Author: Timothee MENOCHET (@_tmenochet)
 
 .DESCRIPTION
-    Invoke-PowerExec runs PowerShell script block on remote computers through various methods.
-    Multi-threading part is mostly stolen from PowerView by @harmj0y and @mattifestation.
+    Invoke-PowerExec runs PowerShell script block on remote computers through various execution methods.
 
 .PARAMETER ScriptBlock
     Specifies the PowerShell script block to run.
@@ -449,10 +448,10 @@ Function Local:New-PowerExec {
         'CimProcess' {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             else {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             if ($cimSessions) {
                 $parameters = @{
@@ -466,10 +465,10 @@ Function Local:New-PowerExec {
         'CimTask' {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             else {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             if ($cimSessions) {
                 $parameters = @{
@@ -483,10 +482,10 @@ Function Local:New-PowerExec {
         'CimService' {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             else {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             if ($cimSessions) {
                 $parameters = @{
@@ -500,10 +499,10 @@ Function Local:New-PowerExec {
         'CimSubscription' {
             $cimOption = New-CimSessionOption -Protocol $Protocol
             if ($Credential.Username) {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Credential $Credential -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             else {
-                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue #-ErrorAction Stop
+                $cimSessions = New-CimSession -ComputerName $ComputerList -Authentication $Authentication -SessionOption $cimOption -OperationTimeoutSec $Timeout -Verbose:$false -ErrorAction SilentlyContinue
             }
             if ($cimSessions) {
                 $parameters = @{
